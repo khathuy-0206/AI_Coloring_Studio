@@ -1,0 +1,167 @@
+// Prisma Schema for AI Coloring Studio
+// Supports local SQLite for easy dev and PostgreSQL for production
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model User {
+  id        String            @id @default(cuid())
+  email     String?           @unique
+  name      String?
+  createdAt DateTime          @default(now()) @map("created_at")
+  updatedAt DateTime          @updatedAt @map("updated_at")
+  sessions  UserSession[]
+  projects  ColoringProject[]
+  favorites UserFavorite[]
+
+  @@map("users")
+}
+
+model UserSession {
+  id        String            @id @default(cuid())
+  userId    String?           @map("user_id")
+  user      User?             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime          @default(now()) @map("created_at")
+  expiresAt DateTime?         @map("expires_at")
+  projects  ColoringProject[]
+
+  @@map("user_sessions")
+}
+
+model ColoringProject {
+  id             String                 @id @default(cuid())
+  userId         String?                @map("user_id")
+  sessionId      String?                @map("session_id")
+  title          String                 @default("Untitled Project")
+  status         String                 @default("ACTIVE") // ACTIVE, ARCHIVED, DELETED
+  createdAt      DateTime               @default(now()) @map("created_at")
+  updatedAt      DateTime               @updatedAt @map("updated_at")
+  user           User?                  @relation(fields: [userId], references: [id], onDelete: SetNull)
+  session        UserSession?           @relation(fields: [sessionId], references: [id], onDelete: SetNull)
+  originalImages OriginalImage[]
+  configurations ColoringConfiguration[]
+  generations    Generation[]
+
+  @@map("coloring_projects")
+}
+
+model OriginalImage {
+  id          String          @id @default(cuid())
+  projectId   String          @map("project_id")
+  project     ColoringProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  storageKey  String          @map("storage_key")
+  mimeType    String          @map("mime_type")
+  fileSize    Int             @map("file_size")
+  width       Int?
+  height      Int?
+  createdAt   DateTime        @default(now()) @map("created_at")
+  generations Generation[]
+
+  @@map("original_images")
+}
+
+model ColoringConfiguration {
+  id                String          @id @default(cuid())
+  projectId         String          @map("project_id")
+  project           ColoringProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  style             String
+  palette           String
+  mood              String
+  lighting          String
+  colorMode         String          @map("color_mode")
+  customInstruction String?         @map("custom_instruction")
+  createdAt         DateTime        @default(now()) @map("created_at")
+
+  @@map("coloring_configurations")
+}
+
+model Generation {
+  id                String          @id @default(cuid())
+  projectId         String          @map("project_id")
+  project           ColoringProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  originalImageId   String?         @map("original_image_id")
+  originalImage     OriginalImage?  @relation(fields: [originalImageId], references: [id], onDelete: SetNull)
+  provider          String // "mock" | "openai" | "replicate" etc.
+  model             String?
+  prompt            String
+  status            String          @default("PENDING") // PENDING, PROCESSING, COMPLETED, FAILED
+  generatedImageKey String?         @map("generated_image_key")
+  errorCode         String?         @map("error_code")
+  createdAt         DateTime        @default(now()) @map("created_at")
+  completedAt       DateTime?       @map("completed_at")
+
+  @@map("generations")
+}
+
+model StylePreset {
+  id             String   @id @default(cuid())
+  name           String
+  description    String
+  promptTemplate String   @map("prompt_template")
+  thumbnailUrl   String?  @map("thumbnail_url")
+  isActive       Boolean  @default(true) @map("is_active")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  @@map("style_presets")
+}
+
+model PalettePreset {
+  id          String   @id @default(cuid())
+  name        String
+  colors      String // Comma-separated or JSON string of hex codes
+  description String
+  colorGroup  String   @map("color_group")
+  thumbnailUrl String? @map("thumbnail_url")
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@map("palette_presets")
+}
+
+model InspirationConcept {
+  id               String   @id @default(cuid())
+  title            String
+  description      String
+  imageUrl         String   @map("image_url")
+  suggestedStyle   String   @map("suggested_style")
+  suggestedPalette String   @map("suggested_palette")
+  mood             String
+  lighting         String
+  isActive         Boolean  @default(true) @map("is_active")
+  createdAt        DateTime @default(now()) @map("created_at")
+
+  @@map("inspiration_concepts")
+}
+
+model ColoringChallenge {
+  id               String   @id @default(cuid())
+  title            String
+  description      String
+  topic            String
+  startDate        DateTime @map("start_date")
+  endDate          DateTime @map("end_date")
+  suggestedPalette String   @map("suggested_palette")
+  suggestedStyle   String   @map("suggested_style")
+  isActive         Boolean  @default(true) @map("is_active")
+  createdAt        DateTime @default(now()) @map("created_at")
+
+  @@map("coloring_challenges")
+}
+
+model UserFavorite {
+  id        String   @id @default(cuid())
+  userId    String?  @map("user_id")
+  user      User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sessionId String?  @map("session_id")
+  itemType  String   @map("item_type") // "palette" | "concept" | "project"
+  itemId    String   @map("item_id")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@map("user_favorites")
+}
