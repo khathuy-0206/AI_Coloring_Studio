@@ -782,42 +782,6 @@ export function ConfigurationPanel({
             <span>100% (Bút Gel trắng &amp; sao lấp lánh rực rỡ)</span>
           </div>
         </div>
-
-        {/* 4. Nút bật/tắt (Toggle): Vân nổi chi tiết (Texture Lines / Fur / Veins) */}
-        <div className="pt-2 border-t border-studio-100 flex items-center justify-between gap-3">
-          <div className="min-w-0">
-            <span className="text-[11px] font-bold text-studio-800 block">
-              🌿 Vân nổi chi tiết (Texture Lines / Fur / Veins)
-            </span>
-            <span className="text-[10px] text-studio-500 block leading-snug">
-              Bật hoặc tắt các đường vân cọ, sọc lông thú, gợn sóng và gân lá tỉ mỉ
-            </span>
-          </div>
-
-          <button
-            type="button"
-            role="switch"
-            aria-checked={effect_settings.texture_lines}
-            onClick={() =>
-              handleUpdateEffectSettings({
-                texture_lines: !effect_settings.texture_lines,
-              })
-            }
-            className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
-              effect_settings.texture_lines
-                ? "bg-emerald-600"
-                : "bg-studio-300"
-            }`}
-          >
-            <span
-              className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-md ring-0 transition duration-200 ease-in-out ${
-                effect_settings.texture_lines
-                  ? "translate-x-5"
-                  : "translate-x-0"
-              }`}
-            />
-          </button>
-        </div>
       </div>
 
       {/* Hiển thị biến trạng thái đồng bộ (State Sync) & Câu lệnh ẩn gửi cho AI (Live Prompt Directives) - Đã ẩn khỏi giao diện nhưng vẫn hoạt động ngầm */}
@@ -860,14 +824,13 @@ export function ConfigurationPanel({
         <button
           type="button"
           onClick={() => setActiveTab("effects")}
-          className={`px-3 py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap transition-all flex items-center gap-1 ${
+          className={`px-3 py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap transition-all flex items-center gap-1.5 ${
             activeTab === "effects"
-              ? "bg-indigo-600 text-white shadow-sm"
-              : "text-indigo-700 bg-indigo-50/70 hover:bg-indigo-100/80"
+              ? "bg-white text-studio-900 shadow-sm"
+              : "text-studio-500 hover:text-studio-800"
           }`}
         >
-          <Sliders className="w-3 h-3" />
-          <span>Tùy chỉnh Hiệu ứng</span>
+          <span>⚖️ Tùy chỉnh Hiệu ứng</span>
         </button>
         <button
           type="button"
@@ -906,7 +869,17 @@ export function ConfigurationPanel({
 
       {/* TAB RIÊNG: BẢNG ĐIỀU KHIỂN TÙY CHỈNH HIỆU ỨNG TÔ MÀU NGHỆ THUẬT (EFFECTS CONTROL PANEL) */}
       {activeTab === "effects" && (
-        <div className="space-y-4">{renderEffectsControlSection()}</div>
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <label className="text-xs font-bold text-studio-800 flex items-center gap-1.5">
+              <span>⚖️ Tùy Chỉnh Hiệu Ứng Tô Màu Nghệ Thuật</span>
+            </label>
+            <span className="text-[11px] font-semibold text-studio-500">
+              Marker &amp; Gel Pen FX
+            </span>
+          </div>
+          {renderEffectsControlSection()}
+        </div>
       )}
 
       {/* MỤC 1: PHONG CÁCH NGHỆ THUẬT & KỸ THUẬT MARKER CHUYÊN SÂU */}
@@ -986,9 +959,6 @@ export function ConfigurationPanel({
               })}
             </div>
           </div>
-
-          {/* Bảng Điều Khiển Tùy Chỉnh Hiệu Ứng (Effects Control Panel) hiển thị trực tiếp ngay dưới Kỹ Thuật Marker */}
-          {renderEffectsControlSection()}
 
           {/* Nhóm 2: Phong cách chủ đề cơ bản */}
           <div className="space-y-2">
