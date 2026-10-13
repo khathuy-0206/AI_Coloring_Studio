@@ -1,4 +1,8 @@
 export type ColoringStyle =
+  | "Frosty Stippling"
+  | "Cozy Marker & Fur"
+  | "Water/Flowing Gradient"
+  | "Botanical Layered"
   | "Cute"
   | "Kawaii"
   | "Pastel"
@@ -77,6 +81,13 @@ export interface CustomGoldenRatioConfig {
   shadowSubtoneHex?: string; // Mã HEX Vùng tối bổ túc (Shadow)
 }
 
+export interface EffectSettings {
+  shadow_depth: number; // Độ đậm bóng đổ (0% - 100%, mặc định 70)
+  stippling_density: number; // Mật độ hạt chấm texture (0% - 100%, mặc định 40)
+  white_highlights: number; // Độ lấp lánh / Ánh sáng trắng (0% - 100%, mặc định 80)
+  texture_lines: boolean; // Vân nổi chi tiết: Fur / Flowing / Veins (mặc định true)
+}
+
 export interface ColoringConfig {
   style: ColoringStyle;
   customStyle?: string;
@@ -84,6 +95,7 @@ export interface ColoringConfig {
   namedPaletteId?: string;
   customPaletteColors?: string[];
   customGoldenRatio?: CustomGoldenRatioConfig;
+  effectSettings?: EffectSettings;
   mood: MoodType;
   lighting: LightingType;
   colorMode: ColorModeType;

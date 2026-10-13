@@ -5,8 +5,16 @@ import {
   LightingType,
   ColorModeType,
   CustomGoldenRatioConfig,
+  EffectSettings,
 } from "@/types";
 import { previewGoldenRatioSummary } from "./smart-coloring";
+
+export const DEFAULT_EFFECT_SETTINGS: EffectSettings = {
+  shadow_depth: 70,
+  stippling_density: 40,
+  white_highlights: 80,
+  texture_lines: true,
+};
 
 export interface PromptBuilderInput {
   style: ColoringStyle;
@@ -21,6 +29,7 @@ export interface PromptBuilderInput {
   userRegionColors?: Record<number, string>;
   userObjectColors?: Record<string, string>;
   customGoldenRatio?: CustomGoldenRatioConfig;
+  effectSettings?: EffectSettings;
   relabeledObjectsList?: string[];
 }
 
@@ -49,6 +58,9 @@ export class ColoringPromptBuilder {
     const lightingDescription = this.getLightingDescription(input.lighting);
     const modeDescription = this.getColorModeDescription(input.colorMode);
     const techKeywords = this.getTechnicalKeywordsSummary(input);
+    const effectDirectives = this.getEffectSettingsDirectives(
+      input.effectSettings
+    );
 
     const golden = previewGoldenRatioSummary({
       paletteColors: input.paletteColors,
@@ -111,11 +123,83 @@ export class ColoringPromptBuilder {
       }.`,
       `3. ƯU TIÊN 3 (GOLDEN RATIO ${domPct}%-${secPct}%-${accPct}% & PALETTE RULES - ${paletteDescription}): Các vùng còn lại được tô tự động theo hệ thống Golden Ratio (custom_golden_ratio = ${customGoldenRatioJson}): Nhóm ${domPct}% Chủ đạo (${golden.dominant60.join(", ")}); Nhóm ${secPct}% Phụ (${golden.secondary30.join(", ")}); Nhóm ${accPct}% Nhấn (${golden.accent10.join(", ")}) và sắc da ${golden.skinTones.base}.`,
       `ATMOSPHERE & LIGHTING (${input.mood} / ${input.lighting} / ${modeDescription} / ${styleDescription}): ${moodDescription}. ${lightingDescription}. Highlights: ${golden.lightingTones.highlightHex} (${golden.lightingTones.highlightLabel}). Clean marker shadows: ${golden.lightingTones.shadowHex} (${golden.lightingTones.shadowLabel}).`,
+      `STEP-BY-STEP MARKER & TEXTURE RENDERING DIRECTIVES (KỸ THUẬT TÔ MÀU CHUYÊN SÂU THEO TỪNG BƯỚC): ${this.getStepByStepMarkerDirectives(input.style)} (1) MULTI-LAYER SHADING (Đổ bóng nhiều lớp): Tự động tạo lớp bóng tối sâu (Darker tone shadows & multi-layer alcohol marker shading) cho các nếp gấp, vùng giao cắt hoặc vùng khuất sáng để tạo khối 3D rõ nét; (2) WHITE GEL PEN HIGHLIGHTS (Đánh sáng bằng bút Gel trắng): Tự động thêm các đốm sáng hình ngôi sao (starburst sparkles), chấm sáng đôi hoặc vệt sáng trắng (White gel pen highlights) tại các điểm giao nhau, viền đón sáng và đỉnh khối 3D giúp bức tranh sống động, rực rỡ; (3) TEXTURE DOTS / STIPPLING (Kết cấu chấm hạt & Vân bút Marker): Phủ lớp hạt texture nhẹ nhàng (stippling dots, micro-fur strokes, flowing wave lines, hoặc botanical leaf veins tùy theo phong cách "${input.style}") lên bề mặt vật thể giống hệt kỹ thuật tô màu bút marker thủ công trên giấy.`,
+      `ADVANCED EFFECT CUSTOMIZATION DIRECTIVES (THÔNG SỐ TÙY CHỈNH HIỆU ỨNG NGƯỜI DÙNG): ${effectDirectives}`,
       `MAGIC TWILIGHT & GLOW RENDERING ENGINE (ÁNH SÁNG ĐÊM HUYỀN BÍ & ĐỔ BÓNG ĐA SẮC NGHỆ THUẬT): (1) MONOCHROMATIC DEPTH & AMBIENT LIGHTING OVERLAY (Phối màu có chiều sâu & Ánh sáng môi trường đồng bộ): Phủ lớp ánh sáng môi trường đồng bộ theo tâm trạng (${input.mood} / ${input.lighting}) để mọi vật thể hòa chung vào một không gian thống nhất; (2) GLOW & BUBBLE HIGHLIGHT FX (Hiệu ứng phát sáng & Bọt nước/Ánh sao): Các chi tiết bong bóng, bọt nước, đèn, cửa sổ, ánh sao có tâm sáng trắng/vàng nhạt ở giữa, viền phản quang đa sắc và quầng sáng mờ (soft radial aura) hồng/tím/vàng tỏa ra xung quanh kèm Rim Highlight trên bề mặt đón sáng; (3) MULTI-TONE SHADING & SMOOTH GRADIENTS (Đổ bóng đa sắc & Chuyển màu Ohuhu Marker): Mỗi vùng được blend chuyển sắc mượt mà từ vùng đón sáng -> màu trung gian -> màu phụ liền kề -> vùng tối kèm bóng đổ 3D mềm mại (Soft Ambient Occlusion) tạo khối nổi bật.`,
       `TECHNICAL ART DIRECTION KEYWORDS: ${techKeywords.join(", ")}.`,
     ];
 
     return promptSegments.join(" ");
+  }
+
+  /**
+   * Generates explicit AI prompt directives from the user's Effect Customization Panel sliders & toggles:
+   * effect_settings = { shadow_depth, stippling_density, white_highlights, texture_lines }
+   */
+  public static getEffectSettingsDirectives(
+    effectSettings?: EffectSettings
+  ): string {
+    const eff = effectSettings || DEFAULT_EFFECT_SETTINGS;
+    const shadowDepth = Math.max(0, Math.min(100, eff.shadow_depth ?? 70));
+    const stipplingDensity = Math.max(
+      0,
+      Math.min(100, eff.stippling_density ?? 40)
+    );
+    const whiteHighlights = Math.max(
+      0,
+      Math.min(100, eff.white_highlights ?? 80)
+    );
+    const textureLines = eff.texture_lines ?? true;
+
+    const shadowDirective =
+      shadowDepth >= 65
+        ? `Apply deep contrast shading and darker marker sub-tones (shadow_depth=${shadowDepth}%): multi-layer alcohol marker crease shadows and crisp 3D volumetric contrast.`
+        : shadowDepth <= 25
+        ? `Apply soft, gentle low-contrast shading with delicate pastel sub-tones (shadow_depth=${shadowDepth}%).`
+        : `Apply balanced medium-depth alcohol marker shading and smooth 3D transitions (shadow_depth=${shadowDepth}%).`;
+
+    const stipplingDirective =
+      stipplingDensity <= 0
+        ? `Disable stippling texture dots (stippling_density=0%): keep marker washes completely smooth.`
+        : stipplingDensity >= 65
+        ? `Apply dense, rich pointillist marker stippling texture dots across shadow and mid-tone transitions (stippling_density=${stipplingDensity}%).`
+        : `Apply subtle handcrafted marker stippling texture dots for organic paper grain (stippling_density=${stipplingDensity}%).`;
+
+    const highlightDirective =
+      whiteHighlights <= 0
+        ? `Disable white gel pen highlights (white_highlights=0%).`
+        : whiteHighlights >= 65
+        ? `Add prominent sparkling white gel pen highlights on top edges and intersection points, including 4-point star sparkles and glossy rim dashes (white_highlights=${whiteHighlights}%).`
+        : `Add delicate white gel pen specular accents on focal top edges (white_highlights=${whiteHighlights}%).`;
+
+    const textureLinesDirective = textureLines
+      ? `Enable detailed surface texture lines (texture_lines=true): render fine fur tufts, flowing wave ribbons, or botanical leaf/petal veins.`
+      : `Disable detailed surface texture lines (texture_lines=false): omit fur stripes, wave lines, and leaf veins for a clean smooth finish.`;
+
+    return `effect_settings = ${JSON.stringify({
+      shadow_depth: shadowDepth,
+      stippling_density: stipplingDensity,
+      white_highlights: whiteHighlights,
+      texture_lines: textureLines,
+    })} -> (1) ${shadowDirective} (2) ${stipplingDirective} (3) ${highlightDirective} (4) ${textureLinesDirective}`;
+  }
+
+  /**
+   * Returns specialized Step-by-Step Marker & Texture rendering directives for the selected style.
+   */
+  public static getStepByStepMarkerDirectives(style: ColoringStyle): string {
+    switch (style) {
+      case "Frosty Stippling":
+        return "[PRESET: Frosty Stippling / Chấm hạt mịn] Apply Step 1 Base flat marker wash -> Step 2 Multi-layer darker tone shading in recesses -> Step 3 Dense-to-sparse fine Texture Dots / Stippling for porous frosty/foam/snowy tactile transitions -> Step 4 Crisp White Gel Pen Highlights (star sparkles & micro-dots on top peaks).";
+      case "Cozy Marker & Fur":
+        return "[PRESET: Cozy Marker & Fur / Bút dạ lông & Đổ bóng khối] Apply Step 1 Warm marker underpainting -> Step 2 Bold 3D Multi-layer Shading with distinct light/dark volumetric blocks -> Step 3 Directional short fur tufts, striped marker strokes & tactile Texture Dots / Stippling -> Step 4 Glossy White Gel Pen Highlights along rim edges, eyes & contours.";
+      case "Water/Flowing Gradient":
+        return "[PRESET: Water/Flowing Gradient / Dòng chảy uốn lượn] Apply Step 1 Smooth aquatic/sky gradient base -> Step 2 Multi-layer Shading along wave troughs and cloud undersides -> Step 3 Flowing S-curve wave lines, current ribbons & mist Texture Dots / Stippling -> Step 4 Shimmering White Gel Pen Highlights on water crests, ripples & droplets.";
+      case "Botanical Layered":
+        return "[PRESET: Botanical Layered / Hoa lá chi tiết] Apply Step 1 Organic botanical base wash -> Step 2 Multi-layer Shading from petal/leaf base outward -> Step 3 Fine dark-toned leaf veins, petal striations & pollen Texture Dots / Stippling -> Step 4 Dewy White Gel Pen Highlights on leaf tips, vein intersections & flower edges.";
+      default:
+        return "[STANDARD MARKER & TEXTURE PIPELINE] Combine smooth alcohol-marker base layers with Multi-layer Shading in folds, subtle Texture Dots / Stippling for handcrafted paper feel, and crisp White Gel Pen Highlights on focal peaks.";
+    }
   }
 
   /**
@@ -135,6 +219,34 @@ export class ColoringPromptBuilder {
     });
 
     const styleKwMap: Record<ColoringStyle, string[]> = {
+      "Frosty Stippling": [
+        "Frosty Stippling / Chấm hạt mịn",
+        "porous pointillist stipple dot gradient",
+        "Multi-layer Shading in recesses",
+        "White Gel Pen Highlights & star sparkles",
+        "Texture Dots / Stippling handcrafted marker grain",
+      ],
+      "Cozy Marker & Fur": [
+        "Cozy Marker & Fur / Bút dạ lông & Đổ bóng khối",
+        "directional fur tuft & stripe strokes",
+        "bold 3D Multi-layer Shading blocks",
+        "White Gel Pen Highlights on rims & peaks",
+        "Texture Dots / Stippling plush felt finish",
+      ],
+      "Water/Flowing Gradient": [
+        "Water/Flowing Gradient / Dòng chảy uốn lượn",
+        "smooth S-curve flowing wave & cloud ribbons",
+        "aquatic Multi-layer Shading depth",
+        "White Gel Pen Highlights on wave crests & droplets",
+        "Texture Dots / Stippling mist spray",
+      ],
+      "Botanical Layered": [
+        "Botanical Layered / Hoa lá chi tiết",
+        "fine dark-toned leaf veins & petal striations",
+        "botanical Multi-layer Shading from stem to tip",
+        "White Gel Pen Highlights on dewy edges",
+        "Texture Dots / Stippling pollen details",
+      ],
       Cute: ["soft rounded 3D volume", "storybook gouache finish", "rosy blush"],
       Kawaii: ["glossy kawaii cel-soft shading", "candy pastel bounce light", "sparkle eye highlights"],
       Pastel: ["velvety milky pastel gradient", "low-contrast airy diffusion", "creamy paper grain"],
@@ -172,9 +284,11 @@ export class ColoringPromptBuilder {
       ...(styleKwMap[input.style] || []),
       ...(moodKwMap[input.mood] || []),
       ...(lightingKwMap[input.lighting] || []),
+      "Multi-layer Shading (darker tone fold shadows)",
+      "White Gel Pen Highlights (starburst & rim speculars)",
+      "Texture Dots / Stippling (handcrafted marker grain)",
       "Ohuhu multi-tone gradient blending",
       "iridescent bubble & starlight radial glow aura",
-      "3D soft ambient occlusion & rim highlights",
       "closed-path zero bleed",
     ];
   }
@@ -184,6 +298,14 @@ export class ColoringPromptBuilder {
     customStyle?: string
   ): string {
     switch (style) {
+      case "Frosty Stippling":
+        return "Frosty Stippling / Chấm hạt mịn: porous stipple-dot texture transitions, multi-layer darker tone shadow depth in folds, and crisp white gel pen sparkle highlights";
+      case "Cozy Marker & Fur":
+        return "Cozy Marker & Fur / Bút dạ lông & Đổ bóng khối: distinct 3D light-and-shadow volumetric blocks, directional short fur/stripe marker strokes, multi-layer crease shading, and glossy white gel pen highlights";
+      case "Water/Flowing Gradient":
+        return "Water/Flowing Gradient / Dòng chảy uốn lượn: smooth S-curve flowing wave and cloud currents, multi-layer depth shading, and shimmering white gel pen ripple highlights";
+      case "Botanical Layered":
+        return "Botanical Layered / Hoa lá chi tiết: intricate dark-toned leaf veins and petal striations, multi-layer botanical shading, stippled pollen centers, and dewy white gel pen edge highlights";
       case "Cute":
         return "Cute, charming storybook coloring, rounded 3D soft volume, friendly and adorable aesthetic";
       case "Kawaii":

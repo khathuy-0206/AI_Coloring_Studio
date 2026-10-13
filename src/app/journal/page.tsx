@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import {
   Bookmark,
   Sparkles,
@@ -10,19 +11,59 @@ import {
   Calendar,
   Palette,
   ArrowRight,
+  Pencil,
 } from "lucide-react";
+import {
+  ColoringConfig,
+  CustomGoldenRatioConfig,
+  EffectSettings,
+} from "@/types";
+import {
+  AISceneAnalysis,
+  DetectedObjectBadgeItem,
+} from "@/lib/smart-coloring";
 
-interface JournalEntry {
+export interface JournalEntry {
   id: string;
   title: string;
   originalImage: string;
   coloredImage: string;
+  mimeType?: string;
   style: string;
   palette: string;
   date: string;
+  // Gói dữ liệu trạng thái phiên làm việc (Session Metadata JSON) phục vụ khôi phục & chỉnh sửa lại
+  config?: ColoringConfig;
+  selectedNamedPaletteId?: string;
+  paletteColors?: string[];
+  userObjectColors?: Record<string, string>;
+  userObjectRegionColors?: Record<number, string>;
+  userRegionColors?: Record<number, string>;
+  deletedObjectLabels?: string[];
+  customGoldenRatio?: CustomGoldenRatioConfig;
+  effectSettings?: EffectSettings;
+  aiSceneAnalysis?: AISceneAnalysis;
+  appliedSummary?: {
+    goldenRatios?: {
+      dominant: number;
+      secondary: number;
+      accent: number;
+    };
+    dominantColors: string[];
+    auxiliaryColors: string[];
+    accentColors?: string[];
+    skinToneHex?: string;
+    highlightToneHex?: string;
+    shadowSubtoneHex?: string;
+    colorWheelRule?: string;
+    parsedVietnameseRules: string[];
+    detectedObjectsSummary?: string[];
+    detectedObjects?: DetectedObjectBadgeItem[];
+  } | null;
 }
 
 export default function JournalPage() {
+  const router = useRouter();
   const [entries, setEntries] = useState<JournalEntry[]>([]);
   const [mounted, setMounted] = useState(false);
 
@@ -53,6 +94,17 @@ export default function JournalPage() {
     document.body.removeChild(link);
   };
 
+  // Chuyển hướng về màn hình Studio Tô Màu AI kèm gói dữ liệu trạng thái để chỉnh sửa lại tác phẩm
+  const handleEditArtwork = (item: JournalEntry) => {
+    try {
+      sessionStorage.setItem(
+        "active_editing_journal_entry",
+        JSON.stringify(item)
+      );
+    } catch {}
+    router.push(`/studio?editJournalId=${encodeURIComponent(item.id)}`);
+  };
+
   if (!mounted) return null;
 
   return (
@@ -68,7 +120,7 @@ export default function JournalPage() {
             Tác Phẩm Đã Lưu &amp; Lịch Sử Tô Màu
           </h1>
           <p className="text-sm text-studio-500 mt-1">
-            Lưu giữ những kiệt tác màu sắc đã hoàn thiện, phong cách đã dùng và dấu mốc sáng tạo của riêng bạn.
+            Lưu giữ những kiệt tác màu sắc đã hoàn thiện, hoặc bấm <strong>&ldquo;Chỉnh sửa lại&rdquo;</strong> để nạp lại toàn bộ bảng màu, thẻ đối tượng và hiệu ứng vào Studio Tô Màu AI.
           </p>
         </div>
 
@@ -84,78 +136,114 @@ export default function JournalPage() {
       {/* Lưới các mục trong nhật ký */}
       {entries.length > 0 ? (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-          {entries.map((item) => (
-            <div
-              key={item.id}
-              className="bg-white rounded-3xl p-5 border border-studio-100 shadow-soft hover:shadow-soft-lg transition-all flex flex-col justify-between space-y-4"
-            >
-              <div>
-                {/* Ảnh so sánh trước và sau */}
-                <div className="grid grid-cols-2 gap-2 aspect-[4/3] rounded-2xl overflow-hidden bg-studio-50 p-2 mb-3 border border-studio-100">
-                  <div className="relative rounded-xl overflow-hidden bg-white flex items-center justify-center p-1">
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img
-                      src={item.originalImage}
-                      alt="Bản nét"
-                      className="max-h-full max-w-full object-contain"
-                    />
-                    <span className="absolute bottom-1 left-1 px-1.5 py-0.5 rounded bg-black/60 text-[9px] text-white font-semibold">
-                      Nét Vẽ
+          {entries.map((item) => {
+            const customObjCount = item.userObjectColors
+              ? Object.keys(item.userObjectColors).length
+              : 0;
+            const customRegionCount = item.userRegionColors
+              ? Object.keys(item.userRegionColors).length
+              : 0;
+
+            return (
+              <div
+                key={item.id}
+                className="bg-white rounded-3xl p-5 border border-studio-100 shadow-soft hover:shadow-soft-lg transition-all flex flex-col justify-between space-y-4 group"
+              >
+                <div>
+                  {/* Ảnh so sánh trước và sau (Có thể click trực tiếp để Chỉnh sửa lại) */}
+                  <div
+                    onClick={() => handleEditArtwork(item)}
+                    title="Nhấn để mở lại bức tranh này trong Studio Tô Màu AI và tiếp tục chỉnh sửa"
+                    className="grid grid-cols-2 gap-2 aspect-[4/3] rounded-2xl overflow-hidden bg-studio-50 p-2 mb-3 border border-studio-100 cursor-pointer relative group-hover:border-studio-300 transition-all"
+                  >
+                    <div className="relative rounded-xl overflow-hidden bg-white flex items-center justify-center p-1">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={item.originalImage}
+                        alt="Bản nét"
+                        className="max-h-full max-w-full object-contain"
+                      />
+                      <span className="absolute bottom-1 left-1 px-1.5 py-0.5 rounded bg-black/60 text-[9px] text-white font-semibold">
+                        Nét Vẽ
+                      </span>
+                    </div>
+
+                    <div className="relative rounded-xl overflow-hidden bg-white flex items-center justify-center p-1">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={item.coloredImage}
+                        alt="Bản màu"
+                        className="max-h-full max-w-full object-contain"
+                      />
+                      <span className="absolute bottom-1 right-1 px-1.5 py-0.5 rounded bg-studio-900/80 text-[9px] text-white font-semibold">
+                        Đã Tô Màu
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-pastel-pink text-studio-800">
+                      {item.style}
+                    </span>
+                    <span className="text-[10px] text-studio-400 flex items-center gap-1">
+                      <Calendar className="w-3 h-3" />
+                      {item.date}
                     </span>
                   </div>
 
-                  <div className="relative rounded-xl overflow-hidden bg-white flex items-center justify-center p-1">
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img
-                      src={item.coloredImage}
-                      alt="Bản màu"
-                      className="max-h-full max-w-full object-contain"
-                    />
-                    <span className="absolute bottom-1 right-1 px-1.5 py-0.5 rounded bg-studio-900/80 text-[9px] text-white font-semibold">
-                      Đã Tô Màu
-                    </span>
+                  <h3 className="text-sm font-bold text-studio-900 truncate">
+                    {item.title}
+                  </h3>
+                  <div className="flex flex-wrap items-center gap-1.5 mt-1">
+                    <p className="text-[11px] text-studio-500 flex items-center gap-1">
+                      <Palette className="w-3 h-3 text-studio-400" />
+                      {item.palette}
+                    </p>
+                    {(customObjCount > 0 || customRegionCount > 0) && (
+                      <span className="text-[9px] font-semibold px-1.5 py-0.5 rounded-md bg-emerald-50 text-emerald-700 border border-emerald-200">
+                        Đã tùy chỉnh {customObjCount + customRegionCount} mục
+                      </span>
+                    )}
                   </div>
                 </div>
 
-                <div className="flex items-center justify-between mb-1">
-                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-pastel-pink text-studio-800">
-                    {item.style}
-                  </span>
-                  <span className="text-[10px] text-studio-400 flex items-center gap-1">
-                    <Calendar className="w-3 h-3" />
-                    {item.date}
-                  </span>
+                {/* Các nút thao tác: Chỉnh sửa lại (Edit), Tải Về, Xóa */}
+                <div className="pt-2 border-t border-studio-100 flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <button
+                      type="button"
+                      onClick={() => handleEditArtwork(item)}
+                      className="px-3 py-1.5 rounded-xl bg-studio-900 hover:bg-studio-800 text-white text-xs font-bold flex items-center gap-1.5 shadow-xs transition-all cursor-pointer"
+                      title="Tải lại toàn bộ ảnh nét gốc, bảng màu, thẻ đối tượng và hiệu ứng vào Studio để chỉnh sửa tiếp"
+                    >
+                      <Pencil className="w-3.5 h-3.5 text-pastel-butter" />
+                      <span>Chỉnh sửa lại</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() =>
+                        handleDownload(item.coloredImage, item.title)
+                      }
+                      className="px-3 py-1.5 rounded-xl bg-studio-50 hover:bg-studio-100 text-studio-700 text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer"
+                    >
+                      <Download className="w-3.5 h-3.5" />
+                      <span>Tải Về</span>
+                    </button>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => handleDelete(item.id)}
+                    className="p-1.5 rounded-xl text-rose-500 hover:bg-rose-50 transition-all cursor-pointer shrink-0"
+                    title="Xoá khỏi nhật ký"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
                 </div>
-
-                <h3 className="text-sm font-bold text-studio-900 truncate">
-                  {item.title}
-                </h3>
-                <p className="text-[11px] text-studio-500 flex items-center gap-1 mt-0.5">
-                  <Palette className="w-3 h-3 text-studio-400" />
-                  {item.palette}
-                </p>
               </div>
-
-              {/* Các nút thao tác */}
-              <div className="pt-2 border-t border-studio-100 flex items-center justify-between">
-                <button
-                  onClick={() => handleDownload(item.coloredImage, item.title)}
-                  className="px-3 py-1.5 rounded-xl bg-studio-50 hover:bg-studio-100 text-studio-700 text-xs font-semibold flex items-center gap-1.5 transition-all"
-                >
-                  <Download className="w-3.5 h-3.5" />
-                  <span>Tải Về</span>
-                </button>
-
-                <button
-                  onClick={() => handleDelete(item.id)}
-                  className="p-1.5 rounded-xl text-rose-500 hover:bg-rose-50 transition-all"
-                  title="Xoá khỏi nhật ký"
-                >
-                  <Trash2 className="w-4 h-4" />
-                </button>
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       ) : (
         /* Trạng thái trống */
@@ -168,7 +256,7 @@ export default function JournalPage() {
               Nhật Ký Của Bạn Đang Trống
             </h3>
             <p className="text-xs text-studio-500 mt-1 leading-relaxed">
-              Mỗi khi bạn tô màu một bức tranh trong Studio và nhấn &ldquo;Lưu Vào Nhật Ký&rdquo;, tác phẩm sẽ được lưu giữ tại đây để bạn thưởng thức lại bất cứ lúc nào!
+              Mỗi khi bạn tô màu một bức tranh trong Studio và nhấn &ldquo;Lưu Vào Nhật Ký&rdquo;, tác phẩm sẽ được lưu giữ tại đây để bạn thưởng thức hoặc chỉnh sửa lại bất cứ lúc nào!
             </p>
           </div>
           <Link

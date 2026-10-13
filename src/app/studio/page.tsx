@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, Suspense } from "react";
+import React, { useState, useEffect, useRef, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import {
   Sparkles,
@@ -27,6 +27,7 @@ import {
   LightingType,
   ColorModeType,
   CustomGoldenRatioConfig,
+  EffectSettings,
 } from "@/types";
 import { NAMED_PALETTES, FREEBIES } from "@/data/creative-content";
 import { ImageUploader } from "@/components/studio/ImageUploader";
@@ -42,7 +43,10 @@ import {
   DetectedObjectBadgeItem,
   InteractiveSegmentationMap,
 } from "@/lib/smart-coloring";
-import { ColoringPromptBuilder } from "@/lib/prompt-builder";
+import {
+  ColoringPromptBuilder,
+  DEFAULT_EFFECT_SETTINGS,
+} from "@/lib/prompt-builder";
 
 function StudioContent() {
   const searchParams = useSearchParams();
@@ -52,7 +56,7 @@ function StudioContent() {
   const [mimeType, setMimeType] = useState<string>("image/png");
   const [imageName, setImageName] = useState<string>("line-art.png");
 
-  // Trạng thái cấu hình tô màu
+  // Trạng thái cấu hình tô màu (bao gồm biến trạng thái effectSettings mặc định)
   const [config, setConfig] = useState<ColoringConfig>({
     style: "Pastel",
     palette: "Pastel",
@@ -60,6 +64,7 @@ function StudioContent() {
     lighting: "Soft light",
     colorMode: "ai_harmony",
     customInstruction: "",
+    effectSettings: { ...DEFAULT_EFFECT_SETTINGS },
   });
 
   const [selectedNamedPaletteId, setSelectedNamedPaletteId] = useState<string>("lavender-dream");
@@ -72,6 +77,9 @@ function StudioContent() {
   const [generatedPrompt, setGeneratedPrompt] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [journalSaved, setJournalSaved] = useState(false);
+  const [currentJournalEntryId, setCurrentJournalEntryId] = useState<
+    string | null
+  >(null);
   const [appliedSummary, setAppliedSummary] = useState<{
     goldenRatios?: {
       dominant: number;
@@ -236,8 +244,108 @@ function StudioContent() {
     });
   };
 
-  // Đọc tham số URL khi chuyển từ Cảm Hứng, Bảng Màu, Thử Thách, Góc Học Phối Màu hoặc Tranh Miễn Phí
+  // Theo dõi chữ ký EffectSettings & trạng thái chỉnh sửa thực tế của người dùng để KHÔNG tự động tô lại ảnh khi vừa mở từ Nhật Ký
+  const getEffectSettingsSignature = (es?: EffectSettings): string => {
+    const target = es || DEFAULT_EFFECT_SETTINGS;
+    return `${target.shadow_depth}:${target.stippling_density}:${target.white_highlights}:${Boolean(target.texture_lines)}`;
+  };
+  const lastEffectSigRef = useRef<string>(
+    getEffectSettingsSignature(DEFAULT_EFFECT_SETTINGS)
+  );
+  const hasUserModifiedArtworkRef = useRef<boolean>(false);
+
+  // Trích xuất màu sắc thực tế của từng vùng từ bức tranh đã lưu (colImg) để đồng bộ hoàn toàn với InteractiveMap khi mở từ Nhật ký
+  const syncInteractiveMapWithSavedImage = (
+    savedColoredImgUrl: string,
+    map: InteractiveSegmentationMap
+  ): Promise<{
+    updatedMap: InteractiveSegmentationMap;
+    sampledRegionHexMap: Record<number, string>;
+  }> => {
+    return new Promise((resolve) => {
+      const img = new Image();
+      img.crossOrigin = "anonymous";
+      img.onload = () => {
+        try {
+          const canvas = document.createElement("canvas");
+          canvas.width = map.width;
+          canvas.height = map.height;
+          const ctx = canvas.getContext("2d");
+          if (!ctx) {
+            resolve({ updatedMap: map, sampledRegionHexMap: {} });
+            return;
+          }
+          ctx.drawImage(img, 0, 0, map.width, map.height);
+          const pixels = ctx.getImageData(0, 0, map.width, map.height).data;
+
+          const maxRegionId = map.regions.reduce(
+            (max, r) => (r.id > max ? r.id : max),
+            0
+          );
+          const rSum = new Float64Array(maxRegionId + 1);
+          const gSum = new Float64Array(maxRegionId + 1);
+          const bSum = new Float64Array(maxRegionId + 1);
+          const counts = new Int32Array(maxRegionId + 1);
+
+          const totalPixels = map.labels.length;
+          for (let i = 0; i < totalPixels; i += 2) {
+            const rid = map.labels[i];
+            if (rid <= 0 || rid > maxRegionId) continue;
+            const pIdx = i * 4;
+            const r = pixels[pIdx];
+            const g = pixels[pIdx + 1];
+            const b = pixels[pIdx + 2];
+            const a = pixels[pIdx + 3];
+            if (a < 128) continue;
+            // Bỏ qua điểm nét vẽ đen và đốm sáng gel trắng tinh
+            if (r < 55 && g < 55 && b < 55) continue;
+            if (r > 250 && g > 250 && b > 250) continue;
+            rSum[rid] += r;
+            gSum[rid] += g;
+            bSum[rid] += b;
+            counts[rid] += 1;
+          }
+
+          const toHexByte = (n: number) =>
+            Math.min(255, Math.max(0, Math.round(n)))
+              .toString(16)
+              .padStart(2, "0")
+              .toUpperCase();
+
+          const sampledRegionHexMap: Record<number, string> = {};
+          const updatedRegions = map.regions.map((reg) => {
+            if (reg.role === "outer_margin") return reg;
+            const c = counts[reg.id];
+            if (c > 0) {
+              const hex = `#${toHexByte(rSum[reg.id] / c)}${toHexByte(
+                gSum[reg.id] / c
+              )}${toHexByte(bSum[reg.id] / c)}`;
+              sampledRegionHexMap[reg.id] = hex;
+              return { ...reg, colorHex: hex };
+            }
+            return reg;
+          });
+
+          resolve({
+            updatedMap: {
+              ...map,
+              regions: updatedRegions,
+            },
+            sampledRegionHexMap,
+          });
+        } catch {
+          resolve({ updatedMap: map, sampledRegionHexMap: {} });
+        }
+      };
+      img.onerror = () =>
+        resolve({ updatedMap: map, sampledRegionHexMap: {} });
+      img.src = savedColoredImgUrl;
+    });
+  };
+
+  // Đọc tham số URL khi chuyển từ Nhật Ký Sáng Tạo (editJournalId), Cảm Hứng, Bảng Màu, Thử Thách, Góc Học Phối Màu hoặc Tranh Miễn Phí
   useEffect(() => {
+    const paramEditJournalId = searchParams.get("editJournalId");
     const paramStyle = searchParams.get("style");
     const paramPalette = searchParams.get("palette");
     const paramMood = searchParams.get("mood") as MoodType | null;
@@ -245,6 +353,218 @@ function StudioContent() {
     const paramFreebie = searchParams.get("freebie");
     const paramColors = searchParams.get("colors");
     const paramInstruction = searchParams.get("instruction");
+
+    // KHÔI PHỤC PHIÊN LÀM VIỆC TỪ NHẬT KÝ SÁNG TẠO (STATE HYDRATION FROM SAVED JOURNAL ENTRY)
+    if (paramEditJournalId) {
+      try {
+        let targetEntry: Record<string, unknown> | null = null;
+        const sessionRaw = sessionStorage.getItem(
+          "active_editing_journal_entry"
+        );
+        if (sessionRaw) {
+          const parsedSession = JSON.parse(sessionRaw);
+          if (parsedSession && parsedSession.id === paramEditJournalId) {
+            targetEntry = parsedSession;
+          }
+        }
+        if (!targetEntry) {
+          const journalRaw = localStorage.getItem("coloring_journal");
+          if (journalRaw) {
+            const list = JSON.parse(journalRaw);
+            if (Array.isArray(list)) {
+              targetEntry =
+                list.find(
+                  (item: { id?: string }) => item.id === paramEditJournalId
+                ) || null;
+            }
+          }
+        }
+
+        if (targetEntry && typeof targetEntry.originalImage === "string") {
+          const origImg = targetEntry.originalImage;
+          const colImg =
+            typeof targetEntry.coloredImage === "string"
+              ? targetEntry.coloredImage
+              : null;
+          const entryTitle =
+            typeof targetEntry.title === "string"
+              ? targetEntry.title
+              : "line-art.png";
+          const entryMime =
+            typeof targetEntry.mimeType === "string"
+              ? targetEntry.mimeType
+              : "image/png";
+          const savedPaletteStr =
+            typeof targetEntry.palette === "string" ? targetEntry.palette : "";
+          const savedNamedPaletteId =
+            typeof targetEntry.selectedNamedPaletteId === "string"
+              ? targetEntry.selectedNamedPaletteId
+              : undefined;
+
+          const matchedNamedPalette = NAMED_PALETTES.find(
+            (p) =>
+              (savedNamedPaletteId && p.id === savedNamedPaletteId) ||
+              p.id === savedPaletteStr ||
+              p.name.toLowerCase() === savedPaletteStr.toLowerCase()
+          );
+
+          const savedConfigObj = targetEntry.config as
+            | ColoringConfig
+            | undefined;
+          const savedGolden = (targetEntry.customGoldenRatio ||
+            savedConfigObj?.customGoldenRatio) as
+            | CustomGoldenRatioConfig
+            | undefined;
+          const savedEffects = (targetEntry.effectSettings ||
+            savedConfigObj?.effectSettings || {
+              ...DEFAULT_EFFECT_SETTINGS,
+            }) as typeof DEFAULT_EFFECT_SETTINGS;
+          const savedPaletteColors = Array.isArray(targetEntry.paletteColors)
+            ? (targetEntry.paletteColors as string[])
+            : savedConfigObj?.customPaletteColors ||
+              matchedNamedPalette?.colors;
+
+          const hydratedConfig: ColoringConfig = savedConfigObj
+            ? {
+                ...savedConfigObj,
+                customGoldenRatio: savedGolden,
+                effectSettings: savedEffects,
+              }
+            : {
+                style:
+                  (typeof targetEntry.style === "string"
+                    ? (targetEntry.style as ColoringStyle)
+                    : "Pastel") || "Pastel",
+                palette:
+                  (matchedNamedPalette?.styleGroup as BasePalette) || "Pastel",
+                namedPaletteId: matchedNamedPalette?.id,
+                customPaletteColors: savedPaletteColors,
+                mood: "Peaceful",
+                lighting: "Soft light",
+                colorMode: "ai_harmony",
+                customInstruction: "",
+                customGoldenRatio: savedGolden,
+                effectSettings: savedEffects,
+              };
+
+          const hydratedObjColors =
+            (targetEntry.userObjectColors as Record<string, string>) || {};
+          const hydratedObjRegionColors =
+            (targetEntry.userObjectRegionColors as Record<number, string>) ||
+            {};
+          const hydratedRegionColors =
+            (targetEntry.userRegionColors as Record<number, string>) || {};
+          const hydratedDeletedLabels = Array.isArray(
+            targetEntry.deletedObjectLabels
+          )
+            ? (targetEntry.deletedObjectLabels as string[])
+            : [];
+          const hydratedSceneAnalysis = targetEntry.aiSceneAnalysis as
+            | AISceneAnalysis
+            | undefined;
+          const hydratedSummary = targetEntry.appliedSummary as
+            | typeof appliedSummary
+            | undefined;
+
+          // Khóa chữ ký EffectSettings & đánh dấu chưa chỉnh sửa để ngăn useEffect tự động tô lại ảnh gốc đã lưu
+          lastEffectSigRef.current = getEffectSettingsSignature(
+            hydratedConfig.effectSettings
+          );
+          hasUserModifiedArtworkRef.current = false;
+
+          setCurrentJournalEntryId(String(targetEntry.id));
+          setOriginalImage(origImg);
+          setMimeType(entryMime);
+          setImageName(entryTitle);
+          if (colImg) {
+            setResultImage(colImg);
+          }
+          setConfig(hydratedConfig);
+          setSelectedNamedPaletteId(
+            savedNamedPaletteId !== undefined
+              ? savedNamedPaletteId
+              : matchedNamedPalette?.id || "lavender-dream"
+          );
+          setUserObjectColors(hydratedObjColors);
+          setUserObjectRegionColors(hydratedObjRegionColors);
+          setUserRegionColors(hydratedRegionColors);
+          setDeletedObjectLabels(hydratedDeletedLabels);
+          setLastAiSceneAnalysis(hydratedSceneAnalysis);
+          if (hydratedSummary) {
+            setAppliedSummary(hydratedSummary);
+          }
+          setJournalSaved(true);
+          setErrorMessage(null);
+
+          // Khởi tạo lại bản đồ phân đoạn tương tác (interactiveMap) & danh sách thẻ đối tượng từ bức tranh đã lưu (KHÔNG ghi đè resultImage)
+          const effectiveColorsToHydrate =
+            savedPaletteColors && savedPaletteColors.length > 0
+              ? savedPaletteColors
+              : matchedNamedPalette?.colors ||
+                BASE_PALETTE_SWATCHES[hydratedConfig.palette] ||
+                [];
+
+          smartColorLineArt(origImg, {
+            paletteColors:
+              effectiveColorsToHydrate.length > 0
+                ? effectiveColorsToHydrate
+                : undefined,
+            basePalette: hydratedConfig.palette,
+            style: hydratedConfig.style,
+            mood: hydratedConfig.mood,
+            lighting: hydratedConfig.lighting,
+            colorMode: hydratedConfig.colorMode,
+            customInstruction: hydratedConfig.customInstruction,
+            aiSceneAnalysis: hydratedSceneAnalysis,
+            userRegionColors: hydratedRegionColors,
+            userObjectColors: hydratedObjColors,
+            userObjectRegionColors: hydratedObjRegionColors,
+            customGoldenRatio: hydratedConfig.customGoldenRatio,
+            effectSettings: hydratedConfig.effectSettings,
+          })
+            .then(async (smartRes) => {
+              if (!colImg) {
+                setResultImage(smartRes.imageUrl);
+              }
+              if (smartRes.interactiveMap) {
+                if (colImg) {
+                  const { updatedMap, sampledRegionHexMap } =
+                    await syncInteractiveMapWithSavedImage(
+                      colImg,
+                      smartRes.interactiveMap
+                    );
+                  setInteractiveMap(updatedMap);
+                  // Nếu là tác phẩm lưu từ phiên cũ chưa có metadata vùng, giữ màu nền từng vùng từ ảnh đã lưu để khi sửa 1 chi tiết không làm đổi màu các vùng khác
+                  if (
+                    !hydratedSceneAnalysis &&
+                    Object.keys(hydratedObjRegionColors).length === 0 &&
+                    Object.keys(sampledRegionHexMap).length > 0
+                  ) {
+                    setUserObjectRegionColors(sampledRegionHexMap);
+                  }
+                } else {
+                  setInteractiveMap(smartRes.interactiveMap);
+                }
+              }
+              if (smartRes.appliedSummary) {
+                setAppliedSummary(
+                  hydratedSummary &&
+                    hydratedSummary.detectedObjects &&
+                    hydratedSummary.detectedObjects.length > 0
+                    ? {
+                        ...smartRes.appliedSummary,
+                        ...hydratedSummary,
+                      }
+                    : smartRes.appliedSummary
+                );
+              }
+            })
+            .catch(() => {});
+
+          return;
+        }
+      } catch {}
+    }
 
     if (paramFreebie) {
       const foundFreebie = FREEBIES.find((f) => f.id === paramFreebie);
@@ -280,7 +600,19 @@ function StudioContent() {
 
     if (paramStyle) {
       const standardStyles = [
-        "Cute", "Kawaii", "Pastel", "Cozy", "Anime", "Vintage", "Fantasy", "Watercolor", "Custom"
+        "Cute",
+        "Kawaii",
+        "Pastel",
+        "Cozy",
+        "Anime",
+        "Vintage",
+        "Fantasy",
+        "Watercolor",
+        "Frosty Stippling",
+        "Cozy Marker & Fur",
+        "Water/Flowing Gradient",
+        "Botanical Layered",
+        "Custom",
       ];
       if (standardStyles.includes(paramStyle)) {
         setConfig((prev) => ({ ...prev, style: paramStyle as ColoringStyle }));
@@ -349,6 +681,8 @@ function StudioContent() {
     setImageName(name);
     setResultImage(null);
     setErrorMessage(null);
+    setCurrentJournalEntryId(null);
+    setJournalSaved(false);
     setUserObjectColors({});
     setUserObjectRegionColors({});
     setUserRegionColors({});
@@ -363,6 +697,8 @@ function StudioContent() {
     setOriginalImage(null);
     setResultImage(null);
     setErrorMessage(null);
+    setCurrentJournalEntryId(null);
+    setJournalSaved(false);
     setUserObjectColors({});
     setUserObjectRegionColors({});
     setUserRegionColors({});
@@ -402,7 +738,7 @@ function StudioContent() {
     return Object.entries(overridesToUse).map(([k, v]) => `${k} (${v})`);
   };
 
-  // Cập nhật lại Prompt hiển thị theo Ma Trận 3 Tầng Ưu Tiên (Ưu tiên 1: Chỉ vùng > Ưu tiên 2: Cả đối tượng > Ưu tiên 3: Golden Ratio)
+  // Cập nhật lại Prompt hiển thị theo Ma Trận 3 Tầng Ưu Tiên (Ưu tiên 1: Chỉ vùng > Ưu tiên 2: Cả đối tượng > Ưu tiên 3: Golden Ratio) + Effect Settings
   const rebuildLivePrompt = (
     nextConfig: ColoringConfig,
     nextOverrides: Record<string, string>,
@@ -424,15 +760,75 @@ function StudioContent() {
       userRegionColors: nextRegionOverrides,
       userObjectColors: nextOverrides,
       relabeledObjectsList: relabeledList,
+      effectSettings: nextConfig.effectSettings,
     });
     setGeneratedPrompt(built);
   };
+
+  // Tự động cập nhật Prompt ẩn & kết xuất lại bức tranh trên Canvas CHỈ KHI người dùng chủ động kéo thanh trượt Hiệu ứng (effectSettings)
+  useEffect(() => {
+    const currentEffectSig = getEffectSettingsSignature(config.effectSettings);
+    if (!originalImage || !resultImage || isLoading) {
+      lastEffectSigRef.current = currentEffectSig;
+      return;
+    }
+    // Bỏ qua nếu chữ ký hiệu ứng không thay đổi (ngăn chặn tự động tô lại ảnh khi vừa mở từ Nhật ký hoặc mới tải trang)
+    if (currentEffectSig === lastEffectSigRef.current) {
+      return;
+    }
+    lastEffectSigRef.current = currentEffectSig;
+    hasUserModifiedArtworkRef.current = true;
+
+    rebuildLivePrompt(
+      config,
+      userObjectColors,
+      appliedSummary?.detectedObjects,
+      userRegionColors
+    );
+    const timer = setTimeout(async () => {
+      const effectiveColors = getEffectivePaletteColors();
+      try {
+        const smartRes = await smartColorLineArt(originalImage, {
+          paletteColors:
+            effectiveColors.length > 0 ? effectiveColors : undefined,
+          basePalette: config.palette,
+          style: config.style,
+          mood: config.mood,
+          lighting: config.lighting,
+          colorMode: config.colorMode,
+          customInstruction: config.customInstruction,
+          aiSceneAnalysis: lastAiSceneAnalysis,
+          userRegionColors,
+          userObjectColors,
+          userObjectRegionColors,
+          customGoldenRatio: config.customGoldenRatio,
+          effectSettings: config.effectSettings,
+        });
+        setResultImage(smartRes.imageUrl);
+        if (smartRes.interactiveMap) {
+          setInteractiveMap(smartRes.interactiveMap);
+        }
+        if (smartRes.appliedSummary) {
+          setAppliedSummary(smartRes.appliedSummary);
+        }
+      } catch {}
+    }, 120);
+
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    config.effectSettings?.shadow_depth,
+    config.effectSettings?.stippling_density,
+    config.effectSettings?.white_highlights,
+    config.effectSettings?.texture_lines,
+  ]);
 
   // Đồng bộ custom_golden_ratio vào config + Prompt + cập nhật lại bức tranh trên Canvas ngay lập tức
   const applyCustomGoldenRatioAndReRender = async (
     nextCustomGolden: CustomGoldenRatioConfig | undefined,
     overridesToUse: Record<string, string> = userObjectColors
   ) => {
+    hasUserModifiedArtworkRef.current = true;
     const nextConfig: ColoringConfig = {
       ...config,
       customGoldenRatio: nextCustomGolden,
@@ -457,6 +853,7 @@ function StudioContent() {
           userObjectColors: overridesToUse,
           userObjectRegionColors,
           customGoldenRatio: nextCustomGolden,
+          effectSettings: nextConfig.effectSettings,
         });
         setResultImage(smartRes.imageUrl);
         if (smartRes.interactiveMap) {
@@ -780,6 +1177,7 @@ function StudioContent() {
       rawHex.startsWith("#") ? rawHex.trim() : `#${rawHex.trim()}`
     ).toUpperCase();
     if (!/^#[0-9A-F]{6}$/.test(cleanHex)) return;
+    hasUserModifiedArtworkRef.current = true;
 
     const finalLabelVi = (newLabelRaw ?? editingObjectLabelInput ?? labelVi).trim() || labelVi.trim();
     const oldNormKey = labelVi.trim().toLowerCase();
@@ -915,6 +1313,7 @@ function StudioContent() {
           userObjectColors: nextOverrides,
           userObjectRegionColors: nextObjectRegionColors,
           customGoldenRatio: config.customGoldenRatio,
+          effectSettings: config.effectSettings,
         });
         setResultImage(smartRes.imageUrl);
         if (smartRes.interactiveMap) {
@@ -935,6 +1334,7 @@ function StudioContent() {
         : `#${payload.newHex.trim()}`
     ).toUpperCase();
     if (!/^#[0-9A-F]{6}$/.test(cleanHex)) return;
+    hasUserModifiedArtworkRef.current = true;
 
     // ƯU TIÊN 1 (CAO NHẤT - region_colors): Chế độ "Chỉ vùng" hoặc "Chọn nhiều vùng cùng lúc (Batch Coloring)"
     if (payload.applyScope === "region") {
@@ -977,6 +1377,7 @@ function StudioContent() {
             userObjectColors,
             userObjectRegionColors,
             customGoldenRatio: config.customGoldenRatio,
+            effectSettings: config.effectSettings,
           });
           setResultImage(smartRes.imageUrl);
           if (smartRes.interactiveMap) {
@@ -1020,6 +1421,7 @@ function StudioContent() {
     allObjectRegionIds?: number[],
     regionIds?: number[]
   ) => {
+    hasUserModifiedArtworkRef.current = true;
     const nextRegionColors = { ...userRegionColors };
     const nextObjectRegionColors = { ...userObjectRegionColors };
     const nextObjectColors = { ...userObjectColors };
@@ -1080,6 +1482,7 @@ function StudioContent() {
           userObjectColors: nextObjectColors,
           userObjectRegionColors: nextObjectRegionColors,
           customGoldenRatio: config.customGoldenRatio,
+          effectSettings: config.effectSettings,
         });
         setResultImage(smartRes.imageUrl);
         if (smartRes.interactiveMap) {
@@ -1096,6 +1499,7 @@ function StudioContent() {
   const handleAddCustomObjectTag = async () => {
     const cleanLabel = newCustomObjectLabel.trim();
     if (!cleanLabel) return;
+    hasUserModifiedArtworkRef.current = true;
     const rawHex = newCustomObjectHex.trim();
     const cleanHex = (
       rawHex.startsWith("#") ? rawHex : `#${rawHex}`
@@ -1212,6 +1616,7 @@ function StudioContent() {
           userObjectColors: nextOverrides,
           userObjectRegionColors,
           customGoldenRatio: config.customGoldenRatio,
+          effectSettings: config.effectSettings,
         });
         setResultImage(smartRes.imageUrl);
         if (smartRes.interactiveMap) {
@@ -1226,6 +1631,7 @@ function StudioContent() {
 
   // Xóa hoàn toàn 1 thẻ đối tượng mà AI nhận diện sai hoặc bị thừa ([Xóa thẻ])
   const handleDeleteObjectTag = async (labelVi: string, objId?: string) => {
+    hasUserModifiedArtworkRef.current = true;
     const normKey = labelVi.trim().toLowerCase();
     const nextOverrides = { ...userObjectColors };
     delete nextOverrides[normKey];
@@ -1299,6 +1705,7 @@ function StudioContent() {
           userObjectColors: nextOverrides,
           userObjectRegionColors,
           customGoldenRatio: config.customGoldenRatio,
+          effectSettings: config.effectSettings,
         });
         setResultImage(smartRes.imageUrl);
         if (smartRes.interactiveMap) {
@@ -1319,6 +1726,7 @@ function StudioContent() {
 
   // Xóa ghi đè màu của 1 đối tượng cụ thể (Ưu tiên 2) để quay về màu tự động của bảng màu (vẫn bảo toàn các vùng đã chỉnh riêng ở Ưu tiên 1)
   const handleRemoveObjectOverride = async (labelVi: string) => {
+    hasUserModifiedArtworkRef.current = true;
     const normKey = labelVi.trim().toLowerCase();
     const nextOverrides = { ...userObjectColors };
     delete nextOverrides[normKey];
@@ -1354,6 +1762,7 @@ function StudioContent() {
           userObjectColors: nextOverrides,
           userObjectRegionColors: nextObjectRegionColors,
           customGoldenRatio: config.customGoldenRatio,
+          effectSettings: config.effectSettings,
         });
         setResultImage(smartRes.imageUrl);
         if (smartRes.interactiveMap) {
@@ -1368,6 +1777,7 @@ function StudioContent() {
 
   // Xóa toàn bộ ghi đè màu đối tượng và màu vùng
   const handleResetAllObjectOverrides = async () => {
+    hasUserModifiedArtworkRef.current = true;
     setUserObjectColors({});
     setUserObjectRegionColors({});
     setUserRegionColors({});
@@ -1391,6 +1801,7 @@ function StudioContent() {
           userObjectColors: {},
           userObjectRegionColors: {},
           customGoldenRatio: config.customGoldenRatio,
+          effectSettings: config.effectSettings,
         });
         setResultImage(smartRes.imageUrl);
         if (smartRes.interactiveMap) {
@@ -1403,16 +1814,123 @@ function StudioContent() {
     }
   };
 
+  // Lưu trữ hoặc cập nhật gói dữ liệu trạng thái phiên làm việc (Session Metadata JSON) vào Nhật ký (localStorage)
+  const saveSessionToJournal = (params: {
+    coloredImg: string;
+    summaryToSave?: typeof appliedSummary;
+    sceneAnalysisToSave?: AISceneAnalysis;
+    preferredId?: string | null;
+  }) => {
+    if (!originalImage || !params.coloredImg) return;
+    const activeNamed = NAMED_PALETTES.find(
+      (p) => p.id === selectedNamedPaletteId
+    );
+    const effectiveColors = getEffectivePaletteColors();
+    const entryId =
+      params.preferredId || currentJournalEntryId || `gen-${Date.now()}`;
+    setCurrentJournalEntryId(entryId);
+
+    const entryPayload = {
+      id: entryId,
+      title: imageName,
+      originalImage,
+      coloredImage: params.coloredImg,
+      mimeType,
+      style: config.style,
+      palette: activeNamed?.name || config.palette,
+      date: new Date().toLocaleDateString("vi-VN"),
+      config: {
+        ...config,
+        customGoldenRatio: config.customGoldenRatio,
+        effectSettings: config.effectSettings || {
+          ...DEFAULT_EFFECT_SETTINGS,
+        },
+      },
+      selectedNamedPaletteId,
+      paletteColors: effectiveColors,
+      userObjectColors,
+      userObjectRegionColors,
+      userRegionColors,
+      deletedObjectLabels,
+      customGoldenRatio: config.customGoldenRatio,
+      effectSettings: config.effectSettings || { ...DEFAULT_EFFECT_SETTINGS },
+      aiSceneAnalysis: params.sceneAnalysisToSave ?? lastAiSceneAnalysis,
+      appliedSummary: params.summaryToSave ?? appliedSummary,
+    };
+
+    try {
+      const localJournal = JSON.parse(
+        localStorage.getItem("coloring_journal") || "[]"
+      );
+      const list = Array.isArray(localJournal) ? localJournal : [];
+      const existingIdx = list.findIndex(
+        (item: { id?: string }) => item.id === entryId
+      );
+      if (existingIdx >= 0) {
+        list[existingIdx] = entryPayload;
+      } else {
+        list.unshift(entryPayload);
+      }
+      localStorage.setItem(
+        "coloring_journal",
+        JSON.stringify(list.slice(0, 30))
+      );
+      sessionStorage.setItem(
+        "active_editing_journal_entry",
+        JSON.stringify(entryPayload)
+      );
+    } catch {}
+  };
+
+  // Tự động đồng bộ các chỉnh sửa mới nhất (đổi màu đối tượng, chỉ vùng, tỷ lệ Golden Ratio, thanh trượt Hiệu ứng) vào bản ghi Nhật ký hiện tại
+  useEffect(() => {
+    if (
+      !hasUserModifiedArtworkRef.current ||
+      !currentJournalEntryId ||
+      !originalImage ||
+      !resultImage ||
+      isLoading
+    ) {
+      return;
+    }
+    saveSessionToJournal({
+      coloredImg: resultImage,
+      summaryToSave: appliedSummary,
+      sceneAnalysisToSave: lastAiSceneAnalysis,
+      preferredId: currentJournalEntryId,
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    resultImage,
+    userObjectColors,
+    userObjectRegionColors,
+    userRegionColors,
+    deletedObjectLabels,
+    config.style,
+    config.palette,
+    config.customGoldenRatio,
+    config.effectSettings,
+    selectedNamedPaletteId,
+  ]);
+
   const handleGenerate = async () => {
     if (!originalImage) {
       setErrorMessage("Vui lòng tải lên hoặc chọn một bức tranh nét trước khi tô màu.");
       return;
     }
 
+    hasUserModifiedArtworkRef.current = true;
     setIsLoading(true);
     setErrorMessage(null);
     setLoadingStep("Đang phân tích đường nét bức tranh...");
     setJournalSaved(false);
+
+    // Khi bấm "Bắt Đầu Tô Màu Bằng AI" / "Tô Lại Phiên Bản Khác", chỉ giữ lại vùng của các đối tượng mà người dùng chủ động khóa màu
+    const activeObjectRegionColorsForGen =
+      Object.keys(userObjectColors).length > 0 ? userObjectRegionColors : {};
+    if (Object.keys(userObjectColors).length === 0) {
+      setUserObjectRegionColors({});
+    }
 
     const activeNamedPalette = NAMED_PALETTES.find(
       (p) => p.id === selectedNamedPaletteId
@@ -1453,6 +1971,7 @@ function StudioContent() {
       }
 
       let finalColoredImage = data.imageUrl;
+      let latestSummary = appliedSummary;
       // Luôn thực thi Cơ chế Khóa Biên & Đổ Màu Vùng Khép Kín (Hard-Mask & Flood-Fill Rendering Pipeline)
       // để tách Lớp Line-Art gốc làm mặt nạ trên cùng và chống tràn màu 100% giữa các đối tượng kề cận
       if (originalImage) {
@@ -1467,14 +1986,16 @@ function StudioContent() {
           aiSceneAnalysis: data.aiSceneAnalysis,
           userRegionColors,
           userObjectColors,
-          userObjectRegionColors,
+          userObjectRegionColors: activeObjectRegionColorsForGen,
           customGoldenRatio: config.customGoldenRatio,
+          effectSettings: config.effectSettings,
         });
         finalColoredImage = smartRes.imageUrl;
         if (smartRes.interactiveMap) {
           setInteractiveMap(smartRes.interactiveMap);
         }
-        setAppliedSummary(smartRes.appliedSummary || null);
+        latestSummary = smartRes.appliedSummary || null;
+        setAppliedSummary(latestSummary);
       }
 
       setResultImage(finalColoredImage);
@@ -1483,25 +2004,15 @@ function StudioContent() {
       setAiNotes(data.notes || null);
       setGeneratedPrompt(data.prompt);
 
-      // Tự động lưu bản ghi vào nhật ký trình duyệt
-      try {
-        const localJournal = JSON.parse(
-          localStorage.getItem("coloring_journal") || "[]"
-        );
-        localJournal.unshift({
-          id: data.generationId || `gen-${Date.now()}`,
-          title: imageName,
-          originalImage,
-          coloredImage: finalColoredImage,
-          style: config.style,
-          palette: activeNamedPalette?.name || config.palette,
-          date: new Date().toLocaleDateString("vi-VN"),
-        });
-        localStorage.setItem(
-          "coloring_journal",
-          JSON.stringify(localJournal.slice(0, 30))
-        );
-      } catch {}
+      // Tự động lưu bản ghi kèm đầy đủ gói dữ liệu trạng thái (Metadata JSON) vào nhật ký trình duyệt
+      saveSessionToJournal({
+        coloredImg: finalColoredImage,
+        summaryToSave: latestSummary,
+        sceneAnalysisToSave: data.aiSceneAnalysis || lastAiSceneAnalysis,
+        preferredId:
+          currentJournalEntryId || data.generationId || `gen-${Date.now()}`,
+      });
+      setJournalSaved(true);
     } catch (err: unknown) {
       // Fallback: Nếu API gặp sự cố hoặc ngoại tuyến, vẫn tô màu thông minh thành công cho người dùng
       if (originalImage) {
@@ -1517,8 +2028,9 @@ function StudioContent() {
             aiSceneAnalysis: lastAiSceneAnalysis,
             userRegionColors,
             userObjectColors,
-            userObjectRegionColors,
+            userObjectRegionColors: activeObjectRegionColorsForGen,
             customGoldenRatio: config.customGoldenRatio,
+            effectSettings: config.effectSettings,
           });
           setResultImage(smartRes.imageUrl);
           if (smartRes.interactiveMap) {
@@ -1528,6 +2040,13 @@ function StudioContent() {
           setIsMockMode(true);
           setActiveProvider("mock");
           setErrorMessage(null);
+          saveSessionToJournal({
+            coloredImg: smartRes.imageUrl,
+            summaryToSave: smartRes.appliedSummary || null,
+            sceneAnalysisToSave: lastAiSceneAnalysis,
+            preferredId: currentJournalEntryId || `gen-${Date.now()}`,
+          });
+          setJournalSaved(true);
           return;
         } catch {
           // Fall through to error setting
@@ -1870,6 +2389,14 @@ function StudioContent() {
                   <div className="flex items-center gap-2">
                     <button
                       onClick={() => {
+                        if (resultImage) {
+                          saveSessionToJournal({
+                            coloredImg: resultImage,
+                            summaryToSave: appliedSummary,
+                            sceneAnalysisToSave: lastAiSceneAnalysis,
+                            preferredId: currentJournalEntryId,
+                          });
+                        }
                         setJournalSaved(true);
                       }}
                       className={`px-3 py-2 rounded-2xl text-xs font-medium border transition-all flex items-center gap-1.5 ${

@@ -26,6 +26,7 @@ import {
   LightingType,
   ColorModeType,
   CustomGoldenRatioConfig,
+  EffectSettings,
 } from "@/types";
 
 export interface DetectedObjectColorMapping {
@@ -69,6 +70,7 @@ export interface SmartColorOptions {
   /** Ưu tiên 2 (object_colors): Bản đồ các vùng thuộc đối tượng đã tùy chỉnh màu "Cả đối tượng" (xếp sau userRegionColors). */
   userObjectRegionColors?: Record<number, string>;
   customGoldenRatio?: CustomGoldenRatioConfig;
+  effectSettings?: EffectSettings;
   maxDimension?: number;
 }
 
@@ -3740,6 +3742,40 @@ export async function smartColorLineArt(
   const crossDirX = -lightDirY;
   const crossDirY = lightDirX;
 
+  // Cờ nhận diện 4 Phương pháp tô màu chuyên sâu theo từng bước (Step-by-Step Marker & Texture Rendering Styles)
+  const activeStyleNorm = (options.style || "").trim();
+  const isFrostyStippling = activeStyleNorm === "Frosty Stippling";
+  const isCozyMarkerFur = activeStyleNorm === "Cozy Marker & Fur";
+  const isWaterFlowing = activeStyleNorm === "Water/Flowing Gradient";
+  const isBotanicalLayered = activeStyleNorm === "Botanical Layered";
+  const isStepByStepMarkerStyle =
+    isFrostyStippling ||
+    isCozyMarkerFur ||
+    isWaterFlowing ||
+    isBotanicalLayered;
+
+  // Đồng bộ thông số Bảng Điều Khiển Tùy Chỉnh Hiệu Ứng (Advanced Effect Customization Panel)
+  const effSettings = options.effectSettings ?? {
+    shadow_depth: 70,
+    stippling_density: 40,
+    white_highlights: 80,
+    texture_lines: true,
+  };
+  const effShadowRatio =
+    Math.max(0, Math.min(100, Number(effSettings.shadow_depth ?? 70))) / 100;
+  const effStippleRatio =
+    Math.max(0, Math.min(100, Number(effSettings.stippling_density ?? 40))) /
+    100;
+  const effHighlightRatio =
+    Math.max(0, Math.min(100, Number(effSettings.white_highlights ?? 80))) /
+    100;
+  const effTextureLines =
+    effSettings.texture_lines !== undefined
+      ? Boolean(effSettings.texture_lines)
+      : true;
+  // Hệ số nhân độ đậm bóng đổ (mặc định 70% tương ứng ~1.0x, 100% tương ứng ~1.42x, 0% tắt bóng đổ)
+  const shadowScale = effShadowRatio / 0.7;
+
   for (let y = 0; y < h; y++) {
     const ny = y / h;
     const row = y * w;
@@ -3810,12 +3846,15 @@ export async function smartColorLineArt(
             fillB = skyMix.b;
 
             // Đổ bóng Ambient Occlusion nhẹ ở rìa khung cảnh để tăng chiều sâu không gian
-            if (distPx < 10) {
-              const bgAo = Math.pow(1 - distPx / 10, 1.8) * 0.16;
+            if (distPx < 10 && effShadowRatio > 0) {
+              const bgAo =
+                Math.pow(1 - distPx / 10, 1.8) *
+                0.16 *
+                Math.min(1.45, shadowScale);
               const shadedBg = mixRgb(
                 { r: fillR, g: fillG, b: fillB },
                 assigned.cellShadow,
-                bgAo
+                Math.min(0.65, bgAo)
               );
               fillR = shadedBg.r;
               fillG = shadedBg.g;
@@ -3900,12 +3939,15 @@ export async function smartColorLineArt(
             fillG = cloudMix.g;
             fillB = cloudMix.b;
 
-            if (distPx < 9 && ry > 0.45) {
-              const foamAo = Math.pow(1 - distPx / 9, 1.6) * 0.28;
+            if (distPx < 9 && ry > 0.45 && effShadowRatio > 0) {
+              const foamAo =
+                Math.pow(1 - distPx / 9, 1.6) *
+                0.28 *
+                Math.min(1.45, shadowScale);
               const foamShaded = mixRgb(
                 { r: fillR, g: fillG, b: fillB },
                 assigned.cellShadow,
-                foamAo
+                Math.min(0.75, foamAo)
               );
               fillR = foamShaded.r;
               fillG = foamShaded.g;
@@ -3957,11 +3999,22 @@ export async function smartColorLineArt(
               fillR = lit.r;
               fillG = lit.g;
               fillB = lit.b;
-            } else if (lightProj > 0.06) {
-              const shadW = Math.min(0.48, (lightProj - 0.06) * 0.82);
+            } else if (lightProj > 0.06 && effShadowRatio > 0) {
+              const shadW = Math.min(
+                0.72,
+                (lightProj - 0.06) * 0.82 * shadowScale
+              );
+              const shadTarget =
+                effShadowRatio >= 0.8
+                  ? mixRgb(
+                      assigned.cellShadow,
+                      assigned.deepAccentShadow,
+                      (effShadowRatio - 0.7) * 1.4
+                    )
+                  : assigned.cellShadow;
               const shad = mixRgb(
                 { r: fillR, g: fillG, b: fillB },
-                assigned.cellShadow,
+                shadTarget,
                 shadW
               );
               fillR = shad.r;
@@ -3980,14 +4033,21 @@ export async function smartColorLineArt(
                 )
               );
 
-              if (lightProj < -0.09 && distPx >= 1.1 && distPx <= 5.6) {
+              if (
+                lightProj < -0.09 &&
+                distPx >= 1.1 &&
+                distPx <= 5.6 &&
+                effHighlightRatio > 0
+              ) {
                 // Viền bắt sáng phản quang (Rim Highlight) dọc theo cạnh đón ánh sáng
-                const rimBell =
-                  1 - Math.abs(distPx - 3.1) / 2.6;
-                const rimStrength =
+                const rimBell = 1 - Math.abs(distPx - 3.1) / 2.6;
+                const rimStrength = Math.min(
+                  0.85,
                   Math.max(0, rimBell) *
-                  Math.min(1, Math.abs(lightProj + 0.09) * 2.4) *
-                  0.48;
+                    Math.min(1, Math.abs(lightProj + 0.09) * 2.4) *
+                    0.48 *
+                    (effHighlightRatio / 0.8)
+                );
                 const rimmed = mixRgb(
                   { r: fillR, g: fillG, b: fillB },
                   assigned.rimHighlight,
@@ -3996,17 +4056,28 @@ export async function smartColorLineArt(
                 fillR = rimmed.r;
                 fillG = rimmed.g;
                 fillB = rimmed.b;
-              } else if (distPx < maxAoRadius && lightProj > -0.14) {
+              } else if (
+                distPx < maxAoRadius &&
+                lightProj > -0.14 &&
+                effShadowRatio > 0
+              ) {
                 // Bóng đổ 3D mềm mại (Soft Ambient Occlusion) ôm theo đường nét khép kín phía khuất sáng
                 const aoCurve = Math.pow(1 - distPx / maxAoRadius, 1.55);
                 const directionalBoost = Math.max(
                   0.22,
                   Math.min(1, (lightProj + 0.25) * 1.15)
                 );
-                const aoWeight = aoCurve * directionalBoost * 0.42;
+                const aoWeight = Math.min(
+                  0.78,
+                  aoCurve * directionalBoost * 0.42 * shadowScale
+                );
                 const shadowTarget =
-                  aoWeight > 0.24
-                    ? mixRgb(assigned.cellShadow, assigned.deepAccentShadow, 0.45)
+                  aoWeight > 0.22 || effShadowRatio >= 0.75
+                    ? mixRgb(
+                        assigned.cellShadow,
+                        assigned.deepAccentShadow,
+                        Math.min(0.85, 0.35 + effShadowRatio * 0.45)
+                      )
                     : assigned.cellShadow;
                 const aoShaded = mixRgb(
                   { r: fillR, g: fillG, b: fillB },
@@ -4039,6 +4110,275 @@ export async function smartColorLineArt(
                 fillR = warmCore.r;
                 fillG = warmCore.g;
                 fillB = warmCore.b;
+              }
+            }
+
+            // Bước 3.5: BỘ MÁY TÔ MÀU CHUYÊN SÂU THEO TỪNG BƯỚC & TÙY CHỈNH HIỆU ỨNG (ADVANCED EFFECT CUSTOMIZATION ENGINE)
+            // Tích hợp: (A) Multi-layer Shading (shadow_depth), (B) Stippling Density & Texture Lines (stippling_density, texture_lines), (C) White Gel Pen Highlights (white_highlights)
+            if (role !== "eye_white" && reg.size > 65) {
+              // (A) MULTI-LAYER SHADING (Đổ bóng nhiều lớp cho nếp gấp & vùng khuất sáng theo thanh trượt shadow_depth):
+              if (
+                effShadowRatio > 0.15 &&
+                (isStepByStepMarkerStyle || effShadowRatio > 0.45)
+              ) {
+                if (lightProj > 0.14 || (distPx < 5.2 && lightProj > 0.02)) {
+                  const baseLayer2 =
+                    lightProj > 0.24
+                      ? 0.34
+                      : lightProj > 0.14
+                      ? 0.2
+                      : Math.max(0, (1 - distPx / 5.2) * 0.24);
+                  const styleBoost = isStepByStepMarkerStyle ? 1.0 : 0.75;
+                  const layer2Weight = Math.min(
+                    0.68,
+                    baseLayer2 * shadowScale * styleBoost
+                  );
+                  const multiShade = mixRgb(
+                    { r: fillR, g: fillG, b: fillB },
+                    assigned.deepAccentShadow,
+                    layer2Weight
+                  );
+                  fillR = multiShade.r;
+                  fillG = multiShade.g;
+                  fillB = multiShade.b;
+                }
+              }
+
+              // (B1) TEXTURE DOTS / STIPPLING DENSITY (Mật độ hạt chấm texture theo thanh trượt stippling_density 0% - 100%):
+              const cellX = Math.floor(x / 3);
+              const cellY = Math.floor(y / 3);
+              const dotHash =
+                (((cellX * 73856093) ^
+                  (cellY * 19349663) ^
+                  (regId * 83492791)) >>>
+                  0) %
+                1000;
+              const subX = (x % 3) - 1;
+              const subY = (y % 3) - 1;
+              const isDotCenter = subX * subX + subY * subY <= 1;
+
+              if (effStippleRatio > 0 && isDotCenter && distPx > 1.5) {
+                // Hệ số mật độ hạt chấm (mặc định 40% = 0.40)
+                const stippleDensityMult = isFrostyStippling
+                  ? Math.max(0.35, effStippleRatio * 2.1)
+                  : effStippleRatio * 1.35;
+                const shadowStippleThreshold = Math.max(
+                  15,
+                  Math.min(
+                    680,
+                    Math.round((lightProj + 0.32) * 460 * stippleDensityMult)
+                  )
+                );
+                if (dotHash < shadowStippleThreshold) {
+                  const stippleTone =
+                    dotHash % 3 === 0
+                      ? assigned.deepAccentShadow
+                      : assigned.cellShadow;
+                  const stippleAlpha = isFrostyStippling
+                    ? Math.min(0.65, 0.28 + effStippleRatio * 0.42)
+                    : Math.min(0.52, 0.14 + effStippleRatio * 0.36);
+                  const stippled = mixRgb(
+                    { r: fillR, g: fillG, b: fillB },
+                    stippleTone,
+                    stippleAlpha
+                  );
+                  fillR = stippled.r;
+                  fillG = stippled.g;
+                  fillB = stippled.b;
+                } else if (
+                  (isFrostyStippling || effStippleRatio >= 0.55) &&
+                  lightProj < -0.05 &&
+                  dotHash > Math.max(620, 940 - Math.round(effStippleRatio * 340))
+                ) {
+                  // Đốm hạt xốp sáng (Frosty Light Stipple Dots) ở vùng đón sáng
+                  const frostyDot = mixRgb(
+                    { r: fillR, g: fillG, b: fillB },
+                    { r: 255, g: 255, b: 255 },
+                    Math.min(0.62, 0.25 + effStippleRatio * 0.4)
+                  );
+                  fillR = frostyDot.r;
+                  fillG = frostyDot.g;
+                  fillB = frostyDot.b;
+                }
+              }
+
+              // (B2) TEXTURE LINES / FUR / VEINS (Vân nổi chi tiết theo nút bật/tắt texture_lines):
+              if (effTextureLines) {
+                if (isCozyMarkerFur) {
+                  // Phong cách 2: Cozy Marker & Fur / Bút dạ lông & Đổ bóng khối (Vân lông ngắn, sọc ấm & khối 3D rõ rệt)
+                  const furAngle =
+                    Math.sin(rx * 18 + ry * 6 + regId) * 0.65 +
+                    Math.cos((x * 0.45 - y * 0.25) * 1.3);
+                  const furTuftHash =
+                    (((Math.floor(x / 2) * 374761393) ^
+                      (Math.floor(y / 4) * 668265263)) >>>
+                      0) %
+                    100;
+                  if (furAngle > 0.85 && furTuftHash < 42) {
+                    const furStroke = mixRgb(
+                      { r: fillR, g: fillG, b: fillB },
+                      lightProj > 0
+                        ? assigned.deepAccentShadow
+                        : assigned.cellShadow,
+                      0.32
+                    );
+                    fillR = furStroke.r;
+                    fillG = furStroke.g;
+                    fillB = furStroke.b;
+                  } else if (
+                    furAngle < -0.88 &&
+                    furTuftHash < 35 &&
+                    lightProj < 0.08
+                  ) {
+                    const furHighlight = mixRgb(
+                      { r: fillR, g: fillG, b: fillB },
+                      assigned.rimHighlight,
+                      0.36
+                    );
+                    fillR = furHighlight.r;
+                    fillG = furHighlight.g;
+                    fillB = furHighlight.b;
+                  }
+                } else if (isWaterFlowing) {
+                  // Phong cách 3: Water/Flowing Gradient / Dòng chảy uốn lượn (Đường lượn sóng mềm mại cho nước, mây & bề mặt)
+                  const flowWave = Math.sin(
+                    rx * 16 + Math.sin(ry * 10 + regId * 0.5) * 2.1 + ry * 8
+                  );
+                  if (flowWave > 0.68) {
+                    const crestMix = mixRgb(
+                      { r: fillR, g: fillG, b: fillB },
+                      assigned.rimHighlight,
+                      (flowWave - 0.68) * 1.15
+                    );
+                    fillR = crestMix.r;
+                    fillG = crestMix.g;
+                    fillB = crestMix.b;
+                  } else if (flowWave < -0.68) {
+                    const troughMix = mixRgb(
+                      { r: fillR, g: fillG, b: fillB },
+                      assigned.cellShadow,
+                      Math.abs(flowWave + 0.68) * 0.95
+                    );
+                    fillR = troughMix.r;
+                    fillG = troughMix.g;
+                    fillB = troughMix.b;
+                  }
+                } else if (isBotanicalLayered) {
+                  // Phong cách 4: Botanical Layered / Hoa lá chi tiết (Gân lá, gân cánh hoa màu đậm & chấm phấn nhụy)
+                  const dxCenter = rx - 0.5;
+                  const dyBase = ry - 0.85;
+                  const veinWave = Math.abs(
+                    Math.sin((dxCenter * 22 + dyBase * 12) * Math.PI)
+                  );
+                  const centerRib =
+                    Math.abs(dxCenter) < 0.028 && ry > 0.2 && ry < 0.92;
+                  if (
+                    (centerRib || (veinWave < 0.09 && distPx > 2.2)) &&
+                    reg.size > 110
+                  ) {
+                    const veined = mixRgb(
+                      { r: fillR, g: fillG, b: fillB },
+                      assigned.deepAccentShadow,
+                      centerRib ? 0.38 : 0.24
+                    );
+                    fillR = veined.r;
+                    fillG = veined.g;
+                    fillB = veined.b;
+                  } else if (isDotCenter && dotHash < 95 && ry < 0.45) {
+                    const pollenDot = mixRgb(
+                      { r: fillR, g: fillG, b: fillB },
+                      { r: 255, g: 252, b: 230 },
+                      0.55
+                    );
+                    fillR = pollenDot.r;
+                    fillG = pollenDot.g;
+                    fillB = pollenDot.b;
+                  }
+                } else if (!isFrostyStippling && reg.size > 160 && distPx > 2.4) {
+                  // Đường vân cọ marker mảnh nhẹ (Subtle Marker Brush / Vein Lines) cho các phong cách khác khi bật Vân nổi chi tiết
+                  const strokeWave = Math.sin(
+                    (rx * 14 - ry * 9 + regId * 0.3) * Math.PI
+                  );
+                  if (strokeWave > 0.92 && dotHash < 280) {
+                    const brushLine = mixRgb(
+                      { r: fillR, g: fillG, b: fillB },
+                      lightProj > 0
+                        ? assigned.cellShadow
+                        : assigned.softHighlight,
+                      0.16
+                    );
+                    fillR = brushLine.r;
+                    fillG = brushLine.g;
+                    fillB = brushLine.b;
+                  }
+                }
+              }
+
+              // (C) WHITE GEL PEN HIGHLIGHTS (Đánh sáng bằng bút Gel trắng theo thanh trượt white_highlights 0% - 100%):
+              if (effHighlightRatio > 0 && reg.size > 130) {
+                // Vệt sáng bút Gel trắng dọc theo đường viền đón sáng (White Gel Pen Contour Rim Dash)
+                const maxGelBandWidth =
+                  2.2 +
+                  effHighlightRatio * (isStepByStepMarkerStyle ? 1.8 : 1.3);
+                const isGelRimBand =
+                  lightProj < -0.14 - (1 - effHighlightRatio) * 0.12 &&
+                  distPx >= 1.9 &&
+                  distPx <= maxGelBandWidth;
+                const dashThreshold = Math.max(
+                  4,
+                  Math.min(17, Math.round(effHighlightRatio * 17))
+                );
+                const dashPattern =
+                  ((x + y + regId * 7) % 19) < dashThreshold;
+                if (isGelRimBand && dashPattern) {
+                  const gelStrength = Math.min(
+                    0.96,
+                    (isStepByStepMarkerStyle ? 0.45 : 0.32) +
+                      effHighlightRatio * 0.52
+                  );
+                  const gelRim = mixRgb(
+                    { r: fillR, g: fillG, b: fillB },
+                    { r: 255, g: 255, b: 255 },
+                    gelStrength
+                  );
+                  fillR = gelRim.r;
+                  fillG = gelRim.g;
+                  fillB = gelRim.b;
+                }
+
+                // Đốm sáng ngôi sao 4 cánh / Chấm sáng đôi bút Gel trắng tại đỉnh khối 3D (White Gel Pen Star Sparkle)
+                if (
+                  (isStepByStepMarkerStyle || effHighlightRatio >= 0.45) &&
+                  reg.size > Math.max(180, Math.round(420 - effHighlightRatio * 220))
+                ) {
+                  const starRadius = 2.6 + effHighlightRatio * 2.4;
+                  const peakX = reg.minX + (reg.maxX - reg.minX) * 0.29;
+                  const peakY = reg.minY + (reg.maxY - reg.minY) * 0.27;
+                  const dxPeak = Math.abs(x - peakX);
+                  const dyPeak = Math.abs(y - peakY);
+                  const isStarCross =
+                    (dxPeak <= 1.2 && dyPeak <= starRadius) ||
+                    (dyPeak <= 1.2 && dxPeak <= starRadius) ||
+                    dxPeak + dyPeak <= starRadius * 0.58;
+                  if (isStarCross && distPx > 2.2) {
+                    const starFade = Math.max(
+                      0.35,
+                      1 - Math.hypot(dxPeak, dyPeak) / (starRadius + 0.4)
+                    );
+                    const starAlpha = Math.min(
+                      0.98,
+                      starFade * (0.38 + effHighlightRatio * 0.6)
+                    );
+                    const gelStar = mixRgb(
+                      { r: fillR, g: fillG, b: fillB },
+                      { r: 255, g: 255, b: 255 },
+                      starAlpha
+                    );
+                    fillR = gelStar.r;
+                    fillG = gelStar.g;
+                    fillB = gelStar.b;
+                  }
+                }
               }
             }
           }

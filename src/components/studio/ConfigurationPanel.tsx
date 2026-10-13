@@ -8,6 +8,7 @@ import {
   MoodType,
   LightingType,
   ColorModeType,
+  EffectSettings,
 } from "@/types";
 import { NAMED_PALETTES } from "@/data/creative-content";
 import {
@@ -15,7 +16,10 @@ import {
   parseVietnameseInstructions,
   previewGoldenRatioSummary,
 } from "@/lib/smart-coloring";
-import { ColoringPromptBuilder } from "@/lib/prompt-builder";
+import {
+  ColoringPromptBuilder,
+  DEFAULT_EFFECT_SETTINGS,
+} from "@/lib/prompt-builder";
 import {
   Sparkles,
   Sun,
@@ -28,6 +32,8 @@ import {
   Layers,
   Eye,
   Cpu,
+  Sliders,
+  RotateCcw,
 } from "lucide-react";
 
 interface ConfigurationPanelProps {
@@ -44,7 +50,7 @@ export function ConfigurationPanel({
   onSelectNamedPalette,
 }: ConfigurationPanelProps) {
   const [activeTab, setActiveTab] = useState<
-    "style" | "palette" | "atmosphere" | "custom"
+    "style" | "effects" | "palette" | "atmosphere" | "custom"
   >("style");
   const [paletteCategoryFilter, setPaletteCategoryFilter] =
     useState<string>("Tất cả");
@@ -62,6 +68,65 @@ export function ConfigurationPanel({
     "Peaceful",
     "Magical",
     "Vibrant",
+  ];
+
+  // 4 Preset Phương Pháp Tô Màu Chuyên Sâu Theo Từng Bước (Step-by-Step Marker & Texture Rendering Styles)
+  const markerTextureStyles: {
+    id: ColoringStyle;
+    label: string;
+    subtitleVi: string;
+    icon: string;
+    desc: string;
+    directives: string[];
+  }[] = [
+    {
+      id: "Frosty Stippling",
+      label: "Frosty Stippling",
+      subtitleVi: "Chấm hạt mịn",
+      icon: "❄️",
+      desc: "Tạo hiệu ứng kết cấu hạt xốp, chuyển màu mượt bằng các đốm li ti",
+      directives: [
+        "Multi-layer Shading",
+        "Texture Dots / Stippling",
+        "White Gel Pen Highlights",
+      ],
+    },
+    {
+      id: "Cozy Marker & Fur",
+      label: "Cozy Marker & Fur",
+      subtitleVi: "Bút dạ lông & Đổ bóng khối",
+      icon: "🐾",
+      desc: "Tạo mảng sáng tối rõ rệt, vân sọc, đánh bóng 3D",
+      directives: [
+        "Multi-layer Shading",
+        "Texture Dots / Stippling",
+        "White Gel Pen Highlights",
+      ],
+    },
+    {
+      id: "Water/Flowing Gradient",
+      label: "Water/Flowing Gradient",
+      subtitleVi: "Dòng chảy uốn lượn",
+      icon: "🌊",
+      desc: "Dành cho nước, mây với các đường nét chuyển động mượt mà",
+      directives: [
+        "Multi-layer Shading",
+        "Texture Dots / Stippling",
+        "White Gel Pen Highlights",
+      ],
+    },
+    {
+      id: "Botanical Layered",
+      label: "Botanical Layered",
+      subtitleVi: "Hoa lá chi tiết",
+      icon: "🌿",
+      desc: "Tạo gân lá, gân cánh hoa tỉ mỉ bằng màu đậm và điểm nhấn sáng",
+      directives: [
+        "Multi-layer Shading",
+        "Texture Dots / Stippling",
+        "White Gel Pen Highlights",
+      ],
+    },
   ];
 
   const styles: {
@@ -513,7 +578,50 @@ export function ConfigurationPanel({
     });
   };
 
-  // Tự động tạo danh sách Từ khóa kỹ thuật (Style / Lighting / Golden Ratio) cho Prompt AI
+  // Đồng bộ đối tượng trạng thái effect_settings = { shadow_depth: 70, stippling_density: 40, white_highlights: 80, texture_lines: true }
+  const effect_settings: EffectSettings = useMemo(
+    () => ({
+      shadow_depth:
+        config.effectSettings?.shadow_depth ??
+        DEFAULT_EFFECT_SETTINGS.shadow_depth,
+      stippling_density:
+        config.effectSettings?.stippling_density ??
+        DEFAULT_EFFECT_SETTINGS.stippling_density,
+      white_highlights:
+        config.effectSettings?.white_highlights ??
+        DEFAULT_EFFECT_SETTINGS.white_highlights,
+      texture_lines:
+        config.effectSettings?.texture_lines ??
+        DEFAULT_EFFECT_SETTINGS.texture_lines,
+    }),
+    [config.effectSettings]
+  );
+
+  const handleUpdateEffectSettings = (patch: Partial<EffectSettings>) => {
+    const nextEffects: EffectSettings = {
+      ...effect_settings,
+      ...patch,
+    };
+    onChange({
+      ...config,
+      effectSettings: nextEffects,
+    });
+  };
+
+  const handleResetEffectSettings = () => {
+    onChange({
+      ...config,
+      effectSettings: { ...DEFAULT_EFFECT_SETTINGS },
+    });
+  };
+
+  // Chỉ dẫn Prompt ẩn (Prompt directives) tự động sinh theo thời gian thực khi người dùng kéo thanh trượt Hiệu ứng
+  const liveEffectPromptDirectives = useMemo(
+    () => ColoringPromptBuilder.getEffectSettingsDirectives(effect_settings),
+    [effect_settings]
+  );
+
+  // Tự động tạo danh sách Từ khóa kỹ thuật (Style / Lighting / Golden Ratio / Effects) cho Prompt AI
   const autoTechKeywords = useMemo(() => {
     return ColoringPromptBuilder.getTechnicalKeywordsSummary({
       style: config.style,
@@ -526,8 +634,9 @@ export function ConfigurationPanel({
       colorMode: config.colorMode,
       customInstruction: config.customInstruction,
       customGoldenRatio: config.customGoldenRatio,
+      effectSettings: effect_settings,
     });
-  }, [activeNamedPalette, activeEditableColors, config]);
+  }, [activeNamedPalette, activeEditableColors, config, effect_settings]);
 
   // Phân tích thời gian thực câu hướng dẫn tiếng Việt của người dùng
   const parsedVnPreview = useMemo(
@@ -540,6 +649,198 @@ export function ConfigurationPanel({
     lightings.find((l) => l.id === config.lighting) || lightings[1];
   const activeColorModeObj =
     colorModes.find((cm) => cm.id === config.colorMode) || colorModes[0];
+
+  // Cụm điều khiển "Tùy chỉnh Hiệu ứng (Effects)" - Dùng chung cho cả Tab 1 và Tab Hiệu Ứng
+  const renderEffectsControlSection = () => (
+    <div className="p-3.5 rounded-2xl bg-gradient-to-br from-indigo-50/70 via-white to-emerald-50/50 border border-indigo-200/80 space-y-3 shadow-xs">
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <div className="flex items-center gap-1.5">
+          <Sliders className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
+          <span className="text-xs font-bold text-studio-900">
+            Tùy chỉnh Hiệu ứng (Effects)
+          </span>
+          <span className="text-[9px] font-bold px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-800 border border-indigo-200">
+            Marker FX
+          </span>
+        </div>
+
+        <button
+          type="button"
+          onClick={handleResetEffectSettings}
+          title="Đặt lại thông số hiệu ứng mặc định (70% - 40% - 80% - Bật vân)"
+          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-white hover:bg-studio-100 text-studio-600 border border-studio-200 text-[10px] font-semibold transition-colors cursor-pointer"
+        >
+          <RotateCcw className="w-2.5 h-2.5" />
+          <span>Mặc định (70/40/80)</span>
+        </button>
+      </div>
+
+      <p className="text-[10px] text-studio-600 leading-snug">
+        Chủ động kéo thanh trượt hoặc bật/tắt các hiệu ứng tô màu bút Marker chuyên sâu. Hệ thống tự động đồng bộ vào <code className="px-1 py-0.5 rounded bg-white border border-studio-200 font-mono text-[9px] text-indigo-700">effect_settings</code> và tiêm chỉ dẫn tương ứng vào Prompt AI &amp; bộ máy tô màu.
+      </p>
+
+      {/* 3 Thanh trượt (Sliders) & 1 Nút Bật/Tắt (Toggle) */}
+      <div className="space-y-3 bg-white/95 p-3 rounded-2xl border border-studio-100">
+        {/* 1. Thanh trượt: Độ đậm bóng đổ (Shadow Depth / Contrast) */}
+        <div className="space-y-1">
+          <div className="flex items-center justify-between text-[11px]">
+            <label
+              htmlFor="slider-shadow-depth"
+              className="font-bold text-studio-800 flex items-center gap-1.5"
+            >
+              <span>🌑 Độ đậm bóng đổ (Shadow Depth / Contrast)</span>
+            </label>
+            <span className="font-mono font-bold text-xs px-2 py-0.5 rounded-lg bg-studio-100 text-studio-900">
+              {effect_settings.shadow_depth}%
+            </span>
+          </div>
+          <input
+            id="slider-shadow-depth"
+            type="range"
+            min={0}
+            max={100}
+            step={1}
+            value={effect_settings.shadow_depth}
+            onChange={(e) =>
+              handleUpdateEffectSettings({
+                shadow_depth: Number(e.target.value),
+              })
+            }
+            className="w-full accent-indigo-700 cursor-pointer h-1.5 bg-studio-200 rounded-lg"
+          />
+          <div className="flex justify-between text-[9px] text-studio-400 font-medium">
+            <span>0% (Nhẹ nhàng, phẳng dịu)</span>
+            <span>50% (Cân bằng)</span>
+            <span>100% (Khối 3D sắc nét, bóng sâu)</span>
+          </div>
+        </div>
+
+        {/* 2. Thanh trượt: Mật độ hạt chấm texture (Stippling Density) */}
+        <div className="space-y-1 pt-2 border-t border-studio-100">
+          <div className="flex items-center justify-between text-[11px]">
+            <label
+              htmlFor="slider-stippling-density"
+              className="font-bold text-studio-800 flex items-center gap-1.5"
+            >
+              <span>❄️ Mật độ hạt chấm texture (Stippling Density)</span>
+            </label>
+            <span className="font-mono font-bold text-xs px-2 py-0.5 rounded-lg bg-emerald-50 text-emerald-800 border border-emerald-200">
+              {effect_settings.stippling_density}%
+            </span>
+          </div>
+          <input
+            id="slider-stippling-density"
+            type="range"
+            min={0}
+            max={100}
+            step={1}
+            value={effect_settings.stippling_density}
+            onChange={(e) =>
+              handleUpdateEffectSettings({
+                stippling_density: Number(e.target.value),
+              })
+            }
+            className="w-full accent-emerald-600 cursor-pointer h-1.5 bg-studio-200 rounded-lg"
+          />
+          <div className="flex justify-between text-[9px] text-studio-400 font-medium">
+            <span>0% (Không chấm hạt)</span>
+            <span>40% (Hạt mịn tự nhiên)</span>
+            <span>100% (Chấm hạt xốp dày)</span>
+          </div>
+        </div>
+
+        {/* 3. Thanh trượt: Độ lấp lánh / Ánh sáng trắng (White Gel Highlights) */}
+        <div className="space-y-1 pt-2 border-t border-studio-100">
+          <div className="flex items-center justify-between text-[11px]">
+            <label
+              htmlFor="slider-white-highlights"
+              className="font-bold text-studio-800 flex items-center gap-1.5"
+            >
+              <span>✨ Độ lấp lánh / Ánh sáng trắng (White Gel Highlights)</span>
+            </label>
+            <span className="font-mono font-bold text-xs px-2 py-0.5 rounded-lg bg-amber-50 text-amber-800 border border-amber-200">
+              {effect_settings.white_highlights}%
+            </span>
+          </div>
+          <input
+            id="slider-white-highlights"
+            type="range"
+            min={0}
+            max={100}
+            step={1}
+            value={effect_settings.white_highlights}
+            onChange={(e) =>
+              handleUpdateEffectSettings({
+                white_highlights: Number(e.target.value),
+              })
+            }
+            className="w-full accent-amber-500 cursor-pointer h-1.5 bg-studio-200 rounded-lg"
+          />
+          <div className="flex justify-between text-[9px] text-studio-400 font-medium">
+            <span>0% (Tắt ánh sáng trắng)</span>
+            <span>50% (Viền sáng nhẹ)</span>
+            <span>100% (Bút Gel trắng &amp; sao lấp lánh rực rỡ)</span>
+          </div>
+        </div>
+
+        {/* 4. Nút bật/tắt (Toggle): Vân nổi chi tiết (Texture Lines / Fur / Veins) */}
+        <div className="pt-2 border-t border-studio-100 flex items-center justify-between gap-3">
+          <div className="min-w-0">
+            <span className="text-[11px] font-bold text-studio-800 block">
+              🌿 Vân nổi chi tiết (Texture Lines / Fur / Veins)
+            </span>
+            <span className="text-[10px] text-studio-500 block leading-snug">
+              Bật hoặc tắt các đường vân cọ, sọc lông thú, gợn sóng và gân lá tỉ mỉ
+            </span>
+          </div>
+
+          <button
+            type="button"
+            role="switch"
+            aria-checked={effect_settings.texture_lines}
+            onClick={() =>
+              handleUpdateEffectSettings({
+                texture_lines: !effect_settings.texture_lines,
+              })
+            }
+            className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+              effect_settings.texture_lines
+                ? "bg-emerald-600"
+                : "bg-studio-300"
+            }`}
+          >
+            <span
+              className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-md ring-0 transition duration-200 ease-in-out ${
+                effect_settings.texture_lines
+                  ? "translate-x-5"
+                  : "translate-x-0"
+              }`}
+            />
+          </button>
+        </div>
+      </div>
+
+      {/* Hiển thị biến trạng thái đồng bộ (State Sync) & Câu lệnh ẩn gửi cho AI (Live Prompt Directives) - Đã ẩn khỏi giao diện nhưng vẫn hoạt động ngầm */}
+      <div className="hidden p-2.5 rounded-xl bg-studio-900 text-white space-y-1.5 text-[10px]">
+        <div className="flex items-center justify-between gap-2">
+          <span className="font-bold text-emerald-300 flex items-center gap-1">
+            <Cpu className="w-3 h-3" />
+            Đồng bộ trạng thái (State Sync) &amp; AI Prompt Directives:
+          </span>
+          <span className="font-mono text-[9px] px-1.5 py-0.5 rounded bg-white/10 text-amber-200">
+            Live Sync
+          </span>
+        </div>
+        <div className="font-mono text-[9px] text-studio-200 bg-black/30 px-2 py-1 rounded-lg overflow-x-auto whitespace-nowrap">
+          {`effect_settings = { shadow_depth: ${effect_settings.shadow_depth}, stippling_density: ${effect_settings.stippling_density}, white_highlights: ${effect_settings.white_highlights}, texture_lines: ${effect_settings.texture_lines} }`}
+        </div>
+        <p className="text-[9px] text-studio-300 font-mono leading-relaxed line-clamp-3">
+          <strong className="text-indigo-300">Prompt Injected:</strong>{" "}
+          {liveEffectPromptDirectives}
+        </p>
+      </div>
+    </div>
+  );
 
   return (
     <div className="bg-white rounded-3xl p-5 shadow-soft border border-studio-100 space-y-5">
@@ -555,6 +856,18 @@ export function ConfigurationPanel({
           }`}
         >
           1. Phong Cách
+        </button>
+        <button
+          type="button"
+          onClick={() => setActiveTab("effects")}
+          className={`px-3 py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap transition-all flex items-center gap-1 ${
+            activeTab === "effects"
+              ? "bg-indigo-600 text-white shadow-sm"
+              : "text-indigo-700 bg-indigo-50/70 hover:bg-indigo-100/80"
+          }`}
+        >
+          <Sliders className="w-3 h-3" />
+          <span>Tùy chỉnh Hiệu ứng</span>
         </button>
         <button
           type="button"
@@ -591,9 +904,14 @@ export function ConfigurationPanel({
         </button>
       </div>
 
-      {/* MỤC 1: PHONG CÁCH NGHỆ THUẬT */}
+      {/* TAB RIÊNG: BẢNG ĐIỀU KHIỂN TÙY CHỈNH HIỆU ỨNG TÔ MÀU NGHỆ THUẬT (EFFECTS CONTROL PANEL) */}
+      {activeTab === "effects" && (
+        <div className="space-y-4">{renderEffectsControlSection()}</div>
+      )}
+
+      {/* MỤC 1: PHONG CÁCH NGHỆ THUẬT & KỸ THUẬT MARKER CHUYÊN SÂU */}
       {activeTab === "style" && (
-        <div className="space-y-3">
+        <div className="space-y-4">
           <div className="flex items-center justify-between">
             <label className="text-xs font-bold text-studio-800 flex items-center gap-1.5">
               <Sparkles className="w-3.5 h-3.5 text-studio-500" />
@@ -605,39 +923,112 @@ export function ConfigurationPanel({
             </span>
           </div>
 
-          <div className="grid grid-cols-3 gap-2">
-            {styles.map((item) => {
-              const isSelected = config.style === item.id;
-              return (
-                <button
-                  key={item.id}
-                  type="button"
-                  onClick={() => onChange({ ...config, style: item.id })}
-                  className={`p-2.5 rounded-2xl border text-left transition-all flex flex-col justify-between ${
-                    isSelected
-                      ? "border-studio-700 bg-pastel-pink/30 ring-2 ring-studio-400/40 shadow-sm"
-                      : "border-studio-100 bg-white hover:border-studio-200 hover:bg-studio-50/50"
-                  }`}
-                >
-                  <div className="flex items-center justify-between w-full mb-1">
-                    <span className="text-base">{item.icon}</span>
-                    {isSelected && (
-                      <span className="w-4 h-4 rounded-full bg-studio-800 text-white flex items-center justify-center text-[10px]">
-                        ✓
+          {/* Nhóm 1: 4 Phương pháp tô màu chuyên sâu theo từng bước (Step-by-Step Marker & Texture Rendering Styles) */}
+          <div className="p-3 rounded-2xl bg-studio-50/90 border border-studio-200/80 space-y-2.5">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-[11px] font-bold text-studio-900 flex items-center gap-1.5">
+                <PenTool className="w-3.5 h-3.5 text-emerald-600" />
+                Kỹ Thuật Marker &amp; Kết Cấu Chuyên Sâu (Step-by-Step Styles)
+              </span>
+              <span className="text-[9px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200">
+                3D Shading + Gel Pen
+              </span>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              {markerTextureStyles.map((item) => {
+                const isSelected = config.style === item.id;
+                return (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={() => onChange({ ...config, style: item.id })}
+                    className={`p-2.5 rounded-2xl border text-left transition-all flex flex-col justify-between cursor-pointer ${
+                      isSelected
+                        ? "border-emerald-700 bg-emerald-50/80 ring-2 ring-emerald-500/35 shadow-sm"
+                        : "border-studio-200/80 bg-white hover:border-emerald-300 hover:bg-emerald-50/20"
+                    }`}
+                  >
+                    <div className="w-full">
+                      <div className="flex items-center justify-between w-full mb-1">
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          <span className="text-base shrink-0">{item.icon}</span>
+                          <span className="text-xs font-bold text-studio-900 truncate">
+                            {item.label}
+                          </span>
+                        </div>
+                        {isSelected && (
+                          <span className="w-4 h-4 rounded-full bg-emerald-700 text-white flex items-center justify-center text-[10px] shrink-0">
+                            ✓
+                          </span>
+                        )}
+                      </div>
+                      <span className="text-[10px] font-semibold text-emerald-800 block leading-tight">
+                        {item.subtitleVi}
                       </span>
-                    )}
-                  </div>
-                  <div>
-                    <span className="text-xs font-bold text-studio-900 block leading-tight">
-                      {item.label}
-                    </span>
-                    <span className="text-[10px] text-studio-400 block mt-0.5 leading-tight line-clamp-1">
-                      {item.desc}
-                    </span>
-                  </div>
-                </button>
-              );
-            })}
+                      <span className="text-[10px] text-studio-500 block mt-1 leading-snug">
+                        {item.desc}
+                      </span>
+                    </div>
+
+                    <div className="flex flex-wrap gap-1 mt-2 pt-1.5 border-t border-studio-100">
+                      {item.directives.map((dir) => (
+                        <span
+                          key={dir}
+                          className="text-[8px] font-mono font-semibold px-1.5 py-0.5 rounded bg-studio-100 text-studio-700"
+                        >
+                          {dir}
+                        </span>
+                      ))}
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Bảng Điều Khiển Tùy Chỉnh Hiệu Ứng (Effects Control Panel) hiển thị trực tiếp ngay dưới Kỹ Thuật Marker */}
+          {renderEffectsControlSection()}
+
+          {/* Nhóm 2: Phong cách chủ đề cơ bản */}
+          <div className="space-y-2">
+            <span className="text-[11px] font-bold text-studio-700 block">
+              Phong Cách Chủ Đề Cơ Bản
+            </span>
+            <div className="grid grid-cols-3 gap-2">
+              {styles.map((item) => {
+                const isSelected = config.style === item.id;
+                return (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={() => onChange({ ...config, style: item.id })}
+                    className={`p-2.5 rounded-2xl border text-left transition-all flex flex-col justify-between cursor-pointer ${
+                      isSelected
+                        ? "border-studio-700 bg-pastel-pink/30 ring-2 ring-studio-400/40 shadow-sm"
+                        : "border-studio-100 bg-white hover:border-studio-200 hover:bg-studio-50/50"
+                    }`}
+                  >
+                    <div className="flex items-center justify-between w-full mb-1">
+                      <span className="text-base">{item.icon}</span>
+                      {isSelected && (
+                        <span className="w-4 h-4 rounded-full bg-studio-800 text-white flex items-center justify-center text-[10px]">
+                          ✓
+                        </span>
+                      )}
+                    </div>
+                    <div>
+                      <span className="text-xs font-bold text-studio-900 block leading-tight">
+                        {item.label}
+                      </span>
+                      <span className="text-[10px] text-studio-400 block mt-0.5 leading-tight line-clamp-1">
+                        {item.desc}
+                      </span>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
           </div>
 
           {config.style === "Custom" && (

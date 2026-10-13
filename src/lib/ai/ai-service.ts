@@ -85,6 +85,7 @@ export class MockAIImageService implements AIImageService {
       customInstruction: params.config.customInstruction,
       userObjectColors: params.userObjectColors,
       customGoldenRatio: params.config.customGoldenRatio,
+      effectSettings: params.config.effectSettings,
       relabeledObjectsList: params.relabeledObjectsList,
     });
 
@@ -146,6 +147,7 @@ export class GeminiAIImageService implements AIImageService {
       customInstruction: params.config.customInstruction,
       userObjectColors: params.userObjectColors,
       customGoldenRatio: params.config.customGoldenRatio,
+      effectSettings: params.config.effectSettings,
       relabeledObjectsList: params.relabeledObjectsList,
     });
 
@@ -207,15 +209,24 @@ export class GeminiAIImageService implements AIImageService {
         ? params.deletedObjectLabels.join(", ")
         : "";
 
+    const markerStyleDirectives =
+      ColoringPromptBuilder.getStepByStepMarkerDirectives(params.config.style);
+    const effectSettingsDirectives =
+      ColoringPromptBuilder.getEffectSettingsDirectives(
+        params.config.effectSettings
+      );
+
     const systemVisionPrompt = `Bạn là Hệ thống AI Thị Giác Máy Tính (Hard-Mask & Closed-Path Contour Flood-Fill Localization Engine).
 Nhiệm vụ của bạn là phân tích bức tranh Line-Art đính kèm để phục vụ bộ máy Đổ Màu Vùng Khép Kín (Flood-Fill) và Khóa Biên (Hard-Mask Layer Isolation), trả về ĐÚNG 1 ĐỐI TƯỢNG JSON (không kèm markdown) theo Quy trình nghiêm ngặt sau:
 
 THÔNG SỐ CẤU HÌNH CỦA NGƯỜI DÙNG:
 - Phong cách: ${params.config.style}
+- Chỉ dẫn Kỹ thuật Marker & Texture (AI Rendering Directives): ${markerStyleDirectives}
+- Thông số Tùy chỉnh Hiệu ứng của Người dùng (Effect Control Panel): ${effectSettingsDirectives}
 - Bảng màu đã chọn: "${params.namedPaletteName || params.config.palette}" gồm các mã HEX: [${paletteHexList}]
 - Cấu hình Tỷ lệ Golden Ratio (custom_golden_ratio): ${customGoldenRatioJson}
 - Tâm trạng: ${params.config.mood}, Ánh sáng: ${params.config.lighting}, Chế độ: ${params.config.colorMode}
-- YÊU CẦU TỰ CHỌN CỦA NGƯỜNG DÙNG (USER OVERRIDE): "${userCustomNote || "Không có ghi chú văn bản"}"
+- YÊU CẦU TỰ CHỌN CỦA NGƯỜI DÙNG (USER OVERRIDE): "${userCustomNote || "Không có ghi chú văn bản"}"
 - DANH SÁCH MÀU ĐỐI TƯỢNG NGƯỜI DÙNG CHỈ ĐỊNH TRỰC TIẾP: user_object_colors = ${userObjectColorsJson}
 ${strictRelabelingSentence ? `- ${strictRelabelingSentence}` : ""}
 ${deletedListStr ? `- CÁC THẺ ĐỐI TƯỢNG ĐÃ BỊ NGƯỜI DÙNG XÓA BỎ (TUYỆT ĐỐI KHÔNG TRẢ VỀ TRONG DANH SÁCH objects): [${deletedListStr}]` : ""}
@@ -235,6 +246,12 @@ II. QUY TẮC ƯU TIÊN TUYỆT ĐỐI KHI ĐỔ MÀU FLOOD-FILL (STRICT PROMPT 
    1. ƯU TIÊN SỐ 1 (User Object Override & Re-Labeling - user_object_colors): Nếu người dùng đã đổi màu riêng hoặc sửa tên/thêm mới thẻ đối tượng trong user_object_colors = ${userObjectColorsJson} hoặc trong câu lệnh "${userCustomNote}", AI bắt buộc phải định vị đối tượng theo mô tả chi tiết mới này và phủ chính xác mã màu được gán vào vùng contour của đối tượng đó (đặt "isUserOverride": true và "primaryHex" bằng đúng mã HEX đó).
    2. ƯU TIÊN SỐ 2 (Custom Golden Ratio & Palette Rules): Các đối tượng không bị chỉ định riêng ("isUserOverride": false) được phân bổ theo đúng tỷ lệ phần trăm (%) và dải mã màu trong custom_golden_ratio = ${customGoldenRatioJson} và [${paletteHexList}]. Đảm bảo 2 đối tượng đứng sát nhau (như tuyết và tường, hòm thư và nhân vật) luôn nhận các mã màu có độ tương phản/tách biệt rõ ràng qua đường nét đen.
    3. ƯU TIÊN SỐ 3 (Real-world Logic): Đảm bảo quy luật tự nhiên cho "nature_plant" (cây cối, lá cỏ ưu tiên tông xanh lá trong bảng màu), bầu trời/tuyết/nền thoáng dịu, và da người ấm tự nhiên.
+
+III. CHỈ DẪN HIỆU ỨNG KỸ THUẬT TÔ MÀU THEO TỪNG BƯỚC & TÙY CHỈNH NGƯỜI DÙNG (AI RENDERING & EFFECT DIRECTIVES):
+   - Áp dụng nghiêm ngặt: ${effectSettingsDirectives}
+   - Multi-layer Shading: Với mỗi đối tượng trong "objects", hãy cung cấp cả "primaryHex" (tông màu nền cơ bản) và "secondaryHex" (tông màu bóng tối đậm hơn - Darker tone shadows cho các nếp gấp, vùng khuất sáng hoặc gân lá/vân lông).
+   - White Gel Pen Highlights: Thiết lập độ tương phản màu sắc sao cho các điểm sáng trắng (White highlights / starburst sparkles) tại các điểm giao nhau hoặc đỉnh khối 3D nổi bật rực rỡ.
+   - Texture Dots / Stippling: Lựa chọn cặp sắc độ "primaryHex" và "secondaryHex" có chiều sâu để lớp hạt texture (Stippling dots / Fur strokes / Flowing waves / Botanical veins) theo phong cách "${params.config.style}" hiển thị rõ nét như tô bút marker thủ công trên giấy.
 
 ĐỊNH DẠNG JSON TRẢ VỀ BẮT BUỘC:
 {

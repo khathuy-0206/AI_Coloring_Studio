@@ -13,6 +13,10 @@ import {
   RotateCcw,
   Layers,
   Target,
+  GripHorizontal,
+  ChevronDown,
+  ChevronUp,
+  Minus,
 } from "lucide-react";
 import {
   InteractiveSegmentationMap,
@@ -104,12 +108,25 @@ export function BeforeAfterSlider({
   const [editLabelInput, setEditLabelInput] = useState<string>("");
   const [customHexInput, setCustomHexInput] = useState<string>("#FF8FAB");
 
+  // Trạng thái Bảng điều chỉnh màu nổi di động (Draggable Floating Panel)
+  const [panelPos, setPanelPos] = useState<{ x: number; y: number } | null>(
+    null
+  );
+  const [hasUserMovedPanel, setHasUserMovedPanel] = useState<boolean>(false);
+  const [isDraggingPanel, setIsDraggingPanel] = useState<boolean>(false);
+  const [isPanelMinimized, setIsPanelMinimized] = useState<boolean>(false);
+
   const containerRef = useRef<HTMLDivElement>(null);
   const coloredImgRef = useRef<HTMLImageElement>(null);
   const overlayCanvasRef = useRef<HTMLCanvasElement>(null);
   const popupRef = useRef<HTMLDivElement>(null);
 
   const isDraggingSlider = useRef(false);
+  const isDraggingPanelRef = useRef(false);
+  const panelDragOffset = useRef<{ offsetX: number; offsetY: number }>({
+    offsetX: 0,
+    offsetY: 0,
+  });
   const mouseDownPos = useRef<{ x: number; y: number } | null>(null);
 
   const handleMoveSlider = useCallback((clientX: number) => {
@@ -119,6 +136,91 @@ export function BeforeAfterSlider({
     const percentage = Math.max(0, Math.min(100, (x / rect.width) * 100));
     setSliderPosition(percentage);
   }, []);
+
+  // Tính toán vị trí khởi tạo thông minh cho Bảng màu nổi để tránh che mất điểm người dùng vừa click
+  const computeSmartInitialPanelPos = useCallback(
+    (clickClientX: number, clickClientY: number) => {
+      if (typeof window === "undefined") return { x: 24, y: 80 };
+      const vw = window.innerWidth;
+      const vh = window.innerHeight;
+      const panelWidth = 340;
+      const panelHeight = 420;
+
+      const containerRect = containerRef.current?.getBoundingClientRect();
+      let targetX = clickClientX + 28;
+      let targetY = clickClientY - 60;
+
+      if (containerRect) {
+        const isClickOnRightHalf =
+          clickClientX > containerRect.left + containerRect.width * 0.5;
+        if (isClickOnRightHalf) {
+          // Nếu click bên phải tranh -> ưu tiên đặt bảng sang mép trái của khung tranh (hoặc bên ngoài mép trái nếu đủ chỗ)
+          targetX = Math.max(16, containerRect.left + 12);
+        } else {
+          // Nếu click bên trái tranh -> ưu tiên đặt bảng sang mép phải của khung tranh
+          targetX = Math.min(
+            vw - panelWidth - 16,
+            containerRect.right - panelWidth - 12
+          );
+        }
+        targetY = Math.max(
+          72,
+          Math.min(vh - panelHeight - 16, containerRect.top + 12)
+        );
+      }
+
+      const clampedX = Math.max(
+        12,
+        Math.min(vw - panelWidth - 12, Math.round(targetX))
+      );
+      const clampedY = Math.max(
+        12,
+        Math.min(vh - 100, Math.round(targetY))
+      );
+      return { x: clampedX, y: clampedY };
+    },
+    []
+  );
+
+  // Bắt đầu kéo Bảng điều chỉnh màu nổi (Header Drag-and-Drop: onMouseDown)
+  const handlePanelHeaderMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
+    // Không kích hoạt kéo nếu click vào các nút bấm trên Header (Thu gọn / Đóng)
+    if ((e.target as HTMLElement).closest("button")) return;
+    e.preventDefault();
+    e.stopPropagation();
+
+    const currentRect = popupRef.current?.getBoundingClientRect();
+    const startX = panelPos?.x ?? currentRect?.left ?? 24;
+    const startY = panelPos?.y ?? currentRect?.top ?? 80;
+
+    panelDragOffset.current = {
+      offsetX: e.clientX - startX,
+      offsetY: e.clientY - startY,
+    };
+    isDraggingPanelRef.current = true;
+    setIsDraggingPanel(true);
+    setHasUserMovedPanel(true);
+  };
+
+  // Hỗ trợ kéo Bảng màu nổi trên màn hình cảm ứng (Touch Drag)
+  const handlePanelHeaderTouchStart = (e: React.TouchEvent<HTMLDivElement>) => {
+    if ((e.target as HTMLElement).closest("button")) return;
+    if (e.touches.length === 0) return;
+    e.stopPropagation();
+
+    const touch = e.touches[0];
+    const currentRect = popupRef.current?.getBoundingClientRect();
+    const startX = panelPos?.x ?? currentRect?.left ?? 24;
+    const startY = panelPos?.y ?? currentRect?.top ?? 80;
+
+    panelDragOffset.current = {
+      offsetX: touch.clientX - startX,
+      offsetY: touch.clientY - startY,
+    };
+    isDraggingPanelRef.current = true;
+    setIsDraggingPanel(true);
+    setHasUserMovedPanel(true);
+  };
 
   // Bắt đầu kéo thanh trượt khi người dùng nắm vào đường phân cách giữa tranh
   const handleSliderHandleMouseDown = (e: React.MouseEvent) => {
@@ -137,21 +239,65 @@ export function BeforeAfterSlider({
     }
   };
 
+  // Lắng nghe sự kiện toàn cục onMouseMove & onMouseUp cho cả Thanh trượt và Bảng nổi di động
   useEffect(() => {
+    const updatePanelPosition = (clientX: number, clientY: number) => {
+      const vw = window.innerWidth;
+      const vh = window.innerHeight;
+      const panelW = popupRef.current?.offsetWidth || 336;
+      const nextX = Math.max(
+        8,
+        Math.min(vw - Math.min(panelW, 140) - 8, clientX - panelDragOffset.current.offsetX)
+      );
+      const nextY = Math.max(
+        8,
+        Math.min(vh - 52, clientY - panelDragOffset.current.offsetY)
+      );
+      setPanelPos({ x: Math.round(nextX), y: Math.round(nextY) });
+    };
+
     const handleMouseUpGlobal = () => {
       isDraggingSlider.current = false;
+      if (isDraggingPanelRef.current) {
+        isDraggingPanelRef.current = false;
+        setIsDraggingPanel(false);
+      }
     };
+
     const handleMouseMoveGlobal = (e: MouseEvent) => {
+      if (isDraggingPanelRef.current) {
+        updatePanelPosition(e.clientX, e.clientY);
+        return;
+      }
       if (isDraggingSlider.current) {
         handleMoveSlider(e.clientX);
       }
     };
 
+    const handleTouchMoveGlobal = (e: TouchEvent) => {
+      if (isDraggingPanelRef.current && e.touches.length > 0) {
+        updatePanelPosition(e.touches[0].clientX, e.touches[0].clientY);
+      }
+    };
+
+    const handleTouchEndGlobal = () => {
+      if (isDraggingPanelRef.current) {
+        isDraggingPanelRef.current = false;
+        setIsDraggingPanel(false);
+      }
+    };
+
     window.addEventListener("mouseup", handleMouseUpGlobal);
     window.addEventListener("mousemove", handleMouseMoveGlobal);
+    window.addEventListener("touchmove", handleTouchMoveGlobal, {
+      passive: true,
+    });
+    window.addEventListener("touchend", handleTouchEndGlobal);
     return () => {
       window.removeEventListener("mouseup", handleMouseUpGlobal);
       window.removeEventListener("mousemove", handleMouseMoveGlobal);
+      window.removeEventListener("touchmove", handleTouchMoveGlobal);
+      window.removeEventListener("touchend", handleTouchEndGlobal);
     };
   }, [handleMoveSlider]);
 
@@ -605,6 +751,11 @@ export function BeforeAfterSlider({
       setViewMode("colored");
     }
 
+    // Nếu bảng nổi chưa có tọa độ (mở lần đầu) và người dùng chưa tự kéo sang vị trí cố định, đặt vị trí thông minh tránh che điểm vừa click
+    if (!panelPos || (!selectedHit && !hasUserMovedPanel)) {
+      setPanelPos(computeSmartInitialPanelPos(e.clientX, e.clientY));
+    }
+
     const isMultiTrigger =
       e.shiftKey || e.ctrlKey || e.metaKey || isMultiSelectMode;
 
@@ -925,348 +1076,429 @@ export function BeforeAfterSlider({
             </div>
           </>
         )}
+      </div>
 
-        {/* POPUP CHỌN MÀU NHANH TRỰC TIẾP TRÊN CANVAS (QUICK COLOR PICKER OVERLAY) */}
-        {selectedHit && (
+      {/* BẢNG ĐIỀU CHỈNH MÀU NỔI DI ĐỘNG (DRAGGABLE FLOATING PANEL - NON-BLOCKING UI) */}
+      {selectedHit && (
+        <div
+          ref={popupRef}
+          onClick={(e) => e.stopPropagation()}
+          onMouseDown={(e) => e.stopPropagation()}
+          className={`fixed z-70 w-76 sm:w-84 rounded-2xl bg-white/98 backdrop-blur-md border-2 border-studio-900 shadow-2xl overflow-hidden cursor-default pointer-events-auto transition-shadow ${
+            isDraggingPanel
+              ? "ring-4 ring-emerald-500/40 shadow-[0_25px_60px_rgba(0,0,0,0.35)] select-none"
+              : ""
+          }`}
+          style={{
+            left: `${panelPos?.x ?? 24}px`,
+            top: `${panelPos?.y ?? 88}px`,
+          }}
+        >
+          {/* THANH TIÊU ĐỀ KÉO THẢ (DRAGGABLE HEADER BAR - cursor: move) */}
           <div
-            ref={popupRef}
-            onClick={(e) => e.stopPropagation()}
-            onMouseDown={(e) => e.stopPropagation()}
-            className="absolute z-30 w-76 sm:w-84 rounded-2xl bg-white/98 backdrop-blur-md border-2 border-studio-900 shadow-2xl p-3 space-y-2.5 animate-in fade-in zoom-in-95 duration-150 cursor-default"
-            style={{
-              left:
-                multiCount > 1 || isMultiSelectMode
-                  ? "12px"
-                  : selectedHit.containerXPercent > 52
-                  ? `${Math.max(3, selectedHit.containerXPercent - 44)}%`
-                  : `${Math.min(52, selectedHit.containerXPercent + 3)}%`,
-              top:
-                multiCount > 1 || isMultiSelectMode
-                  ? "12px"
-                  : selectedHit.containerYPercent > 52
-                  ? `${Math.max(3, selectedHit.containerYPercent - 46)}%`
-                  : `${Math.min(48, selectedHit.containerYPercent + 3)}%`,
-            }}
+            onMouseDown={handlePanelHeaderMouseDown}
+            onTouchStart={handlePanelHeaderTouchStart}
+            onDoubleClick={() => setIsPanelMinimized((prev) => !prev)}
+            style={{ cursor: "move" }}
+            title="Giữ chuột để kéo bảng màu đến bất kỳ vị trí nào trên màn hình (Nháy đúp để Thu gọn/Mở rộng)"
+            className="flex items-center justify-between gap-2 px-3 py-2 bg-studio-900 text-white select-none cursor-move"
           >
-            {/* Tiêu đề & Nút đóng */}
-            <div className="flex items-start justify-between gap-2 pb-2 border-b border-studio-100">
-              <div className="flex items-center gap-2 min-w-0">
-                <span
-                  className="w-5 h-5 rounded-full border border-black/20 shadow-xs shrink-0"
-                  style={{ backgroundColor: selectedHit.currentHex }}
-                />
-                <div className="min-w-0">
-                  <div className="flex items-center gap-1.5 flex-wrap">
-                    <span className="text-xs font-bold text-studio-900 truncate">
-                      {multiCount > 1
-                        ? `Đang chọn ${multiCount} vùng cùng lúc`
-                        : selectedHit.objectLabelVi}
-                    </span>
-                    <span className="px-1.5 py-0.2 rounded bg-emerald-50 text-emerald-800 border border-emerald-200 text-[9px] font-mono font-bold">
-                      {multiCount > 1
-                        ? `${multiCount} vùng`
-                        : `Vùng #${selectedHit.regionId}`}
-                    </span>
-                  </div>
-                  <p className="text-[10px] text-studio-500">
-                    {multiCount > 1 ? (
-                      <span>
-                        Đổ màu hàng loạt (Ưu tiên 1) • Mã màu:{" "}
-                        <span className="font-mono font-bold text-studio-800">
-                          {selectedHit.currentHex}
-                        </span>
-                      </span>
-                    ) : (
-                      <span>
-                        Tọa độ ({selectedHit.xNorm}, {selectedHit.yNorm}) • Mã màu:{" "}
-                        <span className="font-mono font-bold text-studio-800">
-                          {selectedHit.currentHex}
-                        </span>
-                      </span>
-                    )}
-                  </p>
-                </div>
-              </div>
+            <div className="flex items-center gap-2 min-w-0">
+              <GripHorizontal className="w-4 h-4 text-emerald-400 shrink-0" />
+              <span
+                className="w-3.5 h-3.5 rounded-full border border-white/60 shrink-0"
+                style={{ backgroundColor: selectedHit.currentHex }}
+              />
+              <span className="text-[11px] font-bold truncate">
+                {multiCount > 1
+                  ? `Đang chọn ${multiCount} vùng`
+                  : `${selectedHit.objectLabelVi} (#${selectedHit.regionId})`}
+              </span>
+              <span className="hidden sm:inline-block text-[9px] font-medium px-1.5 py-0.5 rounded bg-white/15 text-emerald-200 shrink-0">
+                Kéo để di chuyển
+              </span>
+            </div>
+
+            {/* Các nút điều khiển Thu gọn (Minimize / Collapse) & Đóng (X) */}
+            <div
+              className="flex items-center gap-1 shrink-0"
+              onMouseDown={(e) => e.stopPropagation()}
+            >
+              <button
+                type="button"
+                onClick={() => setIsPanelMinimized((prev) => !prev)}
+                className="p-1 rounded-lg text-white/80 hover:text-white hover:bg-white/15 transition-colors cursor-pointer"
+                title={
+                  isPanelMinimized
+                    ? "Mở rộng bảng điều chỉnh màu"
+                    : "Thu gọn bảng để quan sát toàn bộ bức tranh"
+                }
+              >
+                {isPanelMinimized ? (
+                  <ChevronDown className="w-4 h-4" />
+                ) : (
+                  <Minus className="w-4 h-4" />
+                )}
+              </button>
               <button
                 type="button"
                 onClick={handleClearAllSelectedRegions}
-                className="p-1 rounded-lg text-studio-400 hover:text-studio-900 hover:bg-studio-100 transition-colors cursor-pointer shrink-0"
-                title="Đóng bảng chọn màu"
+                className="p-1 rounded-lg text-white/80 hover:text-rose-300 hover:bg-white/15 transition-colors cursor-pointer"
+                title="Đóng bảng chọn màu (X)"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
+          </div>
 
-            {/* Thanh điều khiển Chọn Đa Vùng (Multi-Region Selection & Batch Coloring) */}
-            <div className="bg-emerald-50/70 border border-emerald-200/80 rounded-xl p-2 space-y-1.5">
-              <div className="flex items-center justify-between gap-1.5 flex-wrap">
+          {/* Chế độ Thu gọn (Minimized Bar): Nhỏ gọn, không che tranh nhưng vẫn cho phép đổi màu nhanh & chọn thêm vùng */}
+          {isPanelMinimized ? (
+            <div className="px-3 py-2 bg-white flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2 min-w-0">
+                <label
+                  className="inline-flex items-center gap-1.5 px-2 py-1 rounded-xl bg-studio-50 border border-studio-200 hover:border-studio-400 text-[10px] font-bold text-studio-800 cursor-pointer shrink-0"
+                  title="Đổi màu nhanh ngay khi đang thu gọn"
+                >
+                  <span>🌈 Đổi màu:</span>
+                  <input
+                    type="color"
+                    value={
+                      /^#[0-9A-Fa-f]{6}$/.test(selectedHit.currentHex)
+                        ? selectedHit.currentHex
+                        : "#FF8FAB"
+                    }
+                    onChange={(e) => triggerColorChange(e.target.value)}
+                    className="w-4 h-4 rounded cursor-pointer border-0 bg-transparent p-0"
+                  />
+                </label>
+                <span className="text-[10px] font-mono font-bold text-studio-600 truncate">
+                  {selectedHit.currentHex}
+                </span>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setIsPanelMinimized(false)}
+                className="px-2 py-1 rounded-lg bg-emerald-50 text-emerald-800 border border-emerald-200 hover:bg-emerald-100 text-[10px] font-bold cursor-pointer flex items-center gap-1 shrink-0"
+              >
+                <ChevronUp className="w-3 h-3" />
+                Mở rộng
+              </button>
+            </div>
+          ) : (
+            <div className="p-3 space-y-2.5">
+              {/* Thông tin chi tiết vùng / nhóm vùng đang chọn */}
+              <div className="flex items-start justify-between gap-2 pb-2 border-b border-studio-100">
+                <div className="flex items-center gap-2 min-w-0">
+                  <span
+                    className="w-5 h-5 rounded-full border border-black/20 shadow-xs shrink-0"
+                    style={{ backgroundColor: selectedHit.currentHex }}
+                  />
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <span className="text-xs font-bold text-studio-900 truncate">
+                        {multiCount > 1
+                          ? `Đang chọn ${multiCount} vùng cùng lúc`
+                          : selectedHit.objectLabelVi}
+                      </span>
+                      <span className="px-1.5 py-0.2 rounded bg-emerald-50 text-emerald-800 border border-emerald-200 text-[9px] font-mono font-bold">
+                        {multiCount > 1
+                          ? `${multiCount} vùng`
+                          : `Vùng #${selectedHit.regionId}`}
+                      </span>
+                    </div>
+                    <p className="text-[10px] text-studio-500">
+                      {multiCount > 1 ? (
+                        <span>
+                          Đổ màu hàng loạt (Ưu tiên 1) • Mã màu:{" "}
+                          <span className="font-mono font-bold text-studio-800">
+                            {selectedHit.currentHex}
+                          </span>
+                        </span>
+                      ) : (
+                        <span>
+                          Tọa độ ({selectedHit.xNorm}, {selectedHit.yNorm}) • Mã màu:{" "}
+                          <span className="font-mono font-bold text-studio-800">
+                            {selectedHit.currentHex}
+                          </span>
+                        </span>
+                      )}
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Thanh điều khiển Chọn Đa Vùng (Multi-Region Selection & Batch Coloring) */}
+              <div className="bg-emerald-50/70 border border-emerald-200/80 rounded-xl p-2 space-y-1.5">
+                <div className="flex items-center justify-between gap-1.5 flex-wrap">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const next = !isMultiSelectMode;
+                      setIsMultiSelectMode(next);
+                      if (next) setApplyScope("region");
+                    }}
+                    className={`px-2 py-1 rounded-lg text-[10px] font-bold transition-all cursor-pointer flex items-center gap-1 ${
+                      isMultiSelectMode
+                        ? "bg-emerald-700 text-white shadow-2xs"
+                        : "bg-white text-emerald-900 border border-emerald-300 hover:bg-emerald-100"
+                    }`}
+                    title="Bật để click chọn thêm nhiều vùng trên tranh mà không cần giữ phím Shift"
+                  >
+                    <Target className="w-3 h-3 shrink-0" />
+                    <span>
+                      {isMultiSelectMode
+                        ? "Đang bật: Click tranh để thêm vùng"
+                        : "+ Chọn nhiều vùng (hoặc giữ Shift)"}
+                    </span>
+                  </button>
+
+                  {multiCount > 1 && (
+                    <div className="flex items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={handleResetMultiSelectionGroup}
+                        className="px-1.5 py-0.5 rounded-lg bg-amber-50 text-amber-800 border border-amber-200 hover:bg-amber-100 text-[9px] font-bold cursor-pointer"
+                        title="Xóa nhóm vùng chọn, chỉ giữ lại 1 vùng hiện tại"
+                      >
+                        Xóa nhóm vùng chọn
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleClearAllSelectedRegions}
+                        className="px-1.5 py-0.5 rounded-lg bg-rose-50 text-rose-700 border border-rose-200 hover:bg-rose-100 text-[9px] font-bold cursor-pointer"
+                        title="Hủy chọn tất cả các vùng trên Canvas"
+                      >
+                        Hủy chọn tất cả
+                      </button>
+                    </div>
+                  )}
+                </div>
+
+                {/* Danh sách các thẻ vùng đang được chọn đồng thời */}
+                <div className="flex items-center gap-1 flex-wrap max-h-16 overflow-y-auto">
+                  {selectedHits.map((hItem) => (
+                    <span
+                      key={hItem.regionId}
+                      className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-white border border-emerald-200 text-[9px] font-mono font-bold text-studio-800 shadow-2xs"
+                    >
+                      <span
+                        className="w-2.5 h-2.5 rounded-full border border-black/20 shrink-0"
+                        style={{ backgroundColor: hItem.currentHex }}
+                      />
+                      <span>Vùng #{hItem.regionId}</span>
+                      {multiCount > 1 && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const rem = selectedHits.filter(
+                              (r) => r.regionId !== hItem.regionId
+                            );
+                            setSelectedHits(rem);
+                            if (
+                              selectedHit.regionId === hItem.regionId &&
+                              rem.length > 0
+                            ) {
+                              setSelectedHit(rem[rem.length - 1]);
+                            }
+                          }}
+                          className="text-studio-400 hover:text-rose-600 cursor-pointer ml-0.5"
+                          title={`Bỏ vùng #${hItem.regionId} khỏi nhóm chọn`}
+                        >
+                          ×
+                        </button>
+                      )}
+                    </span>
+                  ))}
+                </div>
+              </div>
+
+              {/* Chế độ phạm vi tô: Ưu tiên 1 ("Chỉ vùng" / Đa vùng) cao hơn Ưu tiên 2 ("Cả đối tượng") */}
+              <div className="grid grid-cols-2 gap-1 bg-studio-50 p-1 rounded-xl border border-studio-200/80">
+                <button
+                  type="button"
+                  onClick={() => setApplyScope("region")}
+                  className={`flex items-center justify-center gap-1 px-2 py-1.5 rounded-lg text-[10px] font-bold transition-all cursor-pointer ${
+                    applyScope === "region"
+                      ? "bg-emerald-700 text-white shadow-2xs"
+                      : "text-studio-600 hover:text-studio-900"
+                  }`}
+                  title="Ưu tiên 1 (Cao nhất): Chỉ đổ màu cho vùng (hoặc nhóm vùng) đang chọn, ghi đè tuyệt đối lên màu của đối tượng"
+                >
+                  <Target className="w-3 h-3 shrink-0" />
+                  <span className="truncate">
+                    {multiCount > 1
+                      ? `Chỉ ${multiCount} vùng chọn (Ưu tiên 1)`
+                      : `Chỉ vùng #${selectedHit.regionId} (Ưu tiên 1)`}
+                  </span>
+                </button>
                 <button
                   type="button"
                   onClick={() => {
-                    const next = !isMultiSelectMode;
-                    setIsMultiSelectMode(next);
-                    if (next) setApplyScope("region");
+                    setApplyScope("object");
+                    setIsMultiSelectMode(false);
                   }}
-                  className={`px-2 py-1 rounded-lg text-[10px] font-bold transition-all cursor-pointer flex items-center gap-1 ${
-                    isMultiSelectMode
-                      ? "bg-emerald-700 text-white shadow-2xs"
-                      : "bg-white text-emerald-900 border border-emerald-300 hover:bg-emerald-100"
+                  className={`flex items-center justify-center gap-1 px-2 py-1.5 rounded-lg text-[10px] font-bold transition-all cursor-pointer ${
+                    applyScope === "object"
+                      ? "bg-studio-900 text-white shadow-2xs"
+                      : "text-studio-600 hover:text-studio-900"
                   }`}
-                  title="Bật để click chọn thêm nhiều vùng trên tranh mà không cần giữ phím Shift"
+                  title="Ưu tiên 2: Đổi màu cho toàn bộ đối tượng (các vùng đã chỉnh riêng ở 'Chỉ vùng' vẫn được giữ nguyên)"
                 >
-                  <Target className="w-3 h-3 shrink-0" />
-                  <span>
-                    {isMultiSelectMode
-                      ? "Đang bật: Click tranh để thêm vùng"
-                      : "+ Chọn nhiều vùng (hoặc giữ Shift)"}
+                  <Layers className="w-3 h-3 shrink-0" />
+                  <span className="truncate">
+                    Cả đối tượng ({selectedHit.allObjectRegionIds.length} vùng)
                   </span>
                 </button>
-
-                {multiCount > 1 && (
-                  <div className="flex items-center gap-1">
-                    <button
-                      type="button"
-                      onClick={handleResetMultiSelectionGroup}
-                      className="px-1.5 py-0.5 rounded-lg bg-amber-50 text-amber-800 border border-amber-200 hover:bg-amber-100 text-[9px] font-bold cursor-pointer"
-                      title="Xóa nhóm vùng chọn, chỉ giữ lại 1 vùng hiện tại"
-                    >
-                      Xóa nhóm vùng chọn
-                    </button>
-                    <button
-                      type="button"
-                      onClick={handleClearAllSelectedRegions}
-                      className="px-1.5 py-0.5 rounded-lg bg-rose-50 text-rose-700 border border-rose-200 hover:bg-rose-100 text-[9px] font-bold cursor-pointer"
-                      title="Hủy chọn tất cả các vùng trên Canvas"
-                    >
-                      Hủy chọn tất cả
-                    </button>
-                  </div>
-                )}
               </div>
 
-              {/* Danh sách các thẻ vùng đang được chọn đồng thời */}
-              <div className="flex items-center gap-1 flex-wrap max-h-16 overflow-y-auto">
-                {selectedHits.map((hItem) => (
-                  <span
-                    key={hItem.regionId}
-                    className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-white border border-emerald-200 text-[9px] font-mono font-bold text-studio-800 shadow-2xs"
-                  >
-                    <span
-                      className="w-2.5 h-2.5 rounded-full border border-black/20 shrink-0"
-                      style={{ backgroundColor: hItem.currentHex }}
-                    />
-                    <span>Vùng #{hItem.regionId}</span>
-                    {multiCount > 1 && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const rem = selectedHits.filter(
-                            (r) => r.regionId !== hItem.regionId
-                          );
-                          setSelectedHits(rem);
-                          if (
-                            selectedHit.regionId === hItem.regionId &&
-                            rem.length > 0
-                          ) {
-                            setSelectedHit(rem[rem.length - 1]);
-                          }
-                        }}
-                        className="text-studio-400 hover:text-rose-600 cursor-pointer ml-0.5"
-                        title={`Bỏ vùng #${hItem.regionId} khỏi nhóm chọn`}
-                      >
-                        ×
-                      </button>
-                    )}
-                  </span>
-                ))}
-              </div>
-            </div>
-
-            {/* Chế độ phạm vi tô: Ưu tiên 1 ("Chỉ vùng" / Đa vùng) cao hơn Ưu tiên 2 ("Cả đối tượng") */}
-            <div className="grid grid-cols-2 gap-1 bg-studio-50 p-1 rounded-xl border border-studio-200/80">
-              <button
-                type="button"
-                onClick={() => setApplyScope("region")}
-                className={`flex items-center justify-center gap-1 px-2 py-1.5 rounded-lg text-[10px] font-bold transition-all cursor-pointer ${
-                  applyScope === "region"
-                    ? "bg-emerald-700 text-white shadow-2xs"
-                    : "text-studio-600 hover:text-studio-900"
-                }`}
-                title="Ưu tiên 1 (Cao nhất): Chỉ đổ màu cho vùng (hoặc nhóm vùng) đang chọn, ghi đè tuyệt đối lên màu của đối tượng"
-              >
-                <Target className="w-3 h-3 shrink-0" />
-                <span className="truncate">
-                  {multiCount > 1
-                    ? `Chỉ ${multiCount} vùng chọn (Ưu tiên 1)`
-                    : `Chỉ vùng #${selectedHit.regionId} (Ưu tiên 1)`}
-                </span>
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setApplyScope("object");
-                  setIsMultiSelectMode(false);
-                }}
-                className={`flex items-center justify-center gap-1 px-2 py-1.5 rounded-lg text-[10px] font-bold transition-all cursor-pointer ${
-                  applyScope === "object"
-                    ? "bg-studio-900 text-white shadow-2xs"
-                    : "text-studio-600 hover:text-studio-900"
-                }`}
-                title="Ưu tiên 2: Đổi màu cho toàn bộ đối tượng (các vùng đã chỉnh riêng ở 'Chỉ vùng' vẫn được giữ nguyên)"
-              >
-                <Layers className="w-3 h-3 shrink-0" />
-                <span className="truncate">
-                  Cả đối tượng ({selectedHit.allObjectRegionIds.length} vùng)
-                </span>
-              </button>
-            </div>
-
-            {/* Ô sửa nhanh tên đối tượng ngay trên Popup */}
-            <div className="flex items-center gap-1.5">
-              <input
-                type="text"
-                value={editLabelInput}
-                onChange={(e) => setEditLabelInput(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    e.preventDefault();
-                    triggerColorChange(
-                      selectedHit.currentHex,
-                      editLabelInput
-                    );
-                  }
-                }}
-                placeholder="Tên đối tượng tại điểm click..."
-                className="w-full px-2.5 py-1 text-[11px] font-semibold rounded-xl bg-studio-50 border border-studio-200 focus:outline-none focus:bg-white focus:border-studio-900 text-studio-900"
-              />
-              {editLabelInput.trim() &&
-                editLabelInput.trim() !== selectedHit.objectLabelVi && (
-                  <button
-                    type="button"
-                    onClick={() =>
-                      triggerColorChange(
-                        selectedHit.currentHex,
-                        editLabelInput
-                      )
-                    }
-                    className="shrink-0 px-2 py-1 rounded-xl bg-emerald-700 text-white text-[10px] font-bold hover:bg-emerald-800 cursor-pointer flex items-center gap-0.5"
-                    title="Lưu tên mới cho đối tượng"
-                  >
-                    <Check className="w-3 h-3" />
-                    Lưu
-                  </button>
-                )}
-            </div>
-
-            {/* Bảng chọn màu nhanh (Quick Palette Swatches) */}
-            <div className="space-y-1">
-              <span className="text-[10px] font-bold text-studio-600 uppercase tracking-wider flex items-center gap-1">
-                <Palette className="w-3 h-3 text-studio-500" />
-                {applyScope === "region" && multiCount > 1
-                  ? `Chọn màu gán đồng loạt cho ${multiCount} vùng:`
-                  : "Chọn nhanh màu từ Bảng màu hiện tại:"}
-              </span>
-              <div className="grid grid-cols-8 gap-1.5 pt-0.5">
-                {quickSwatches.map((hex, idx) => {
-                  const normHex = hex.toUpperCase();
-                  const isActive =
-                    selectedHit.currentHex.toUpperCase() === normHex;
-                  return (
-                    <button
-                      key={`${normHex}_${idx}`}
-                      type="button"
-                      onClick={() => triggerColorChange(normHex)}
-                      title={
-                        applyScope === "region"
-                          ? multiCount > 1
-                            ? `Đổ màu ${normHex} đồng loạt cho ${multiCount} vùng đang chọn`
-                            : `Đổ màu ${normHex} cho Chỉ vùng #${selectedHit.regionId}`
-                          : `Đổ màu ${normHex} cho Cả đối tượng ${editLabelInput || selectedHit.objectLabelVi}`
-                      }
-                      className={`w-7 h-7 rounded-xl border transition-all cursor-pointer flex items-center justify-center ${
-                        isActive
-                          ? "ring-2 ring-studio-900 scale-110 border-white shadow-sm"
-                          : "border-black/15 hover:scale-110 hover:border-studio-700"
-                      }`}
-                      style={{ backgroundColor: normHex }}
-                    >
-                      {isActive && (
-                        <Check className="w-3.5 h-3.5 text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.8)]" />
-                      )}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-
-            {/* Color Picker tự do & Nhập HEX thủ công */}
-            <div className="pt-2 border-t border-studio-100 flex items-center justify-between gap-1.5">
-              <label className="inline-flex items-center gap-1.5 px-2 py-1 rounded-xl bg-studio-50 border border-studio-200 hover:border-studio-400 text-[10px] font-semibold text-studio-700 cursor-pointer">
-                <span>🌈 Tự chọn:</span>
-                <input
-                  type="color"
-                  value={
-                    /^#[0-9A-Fa-f]{6}$/.test(selectedHit.currentHex)
-                      ? selectedHit.currentHex
-                      : "#FF8FAB"
-                  }
-                  onChange={(e) => triggerColorChange(e.target.value)}
-                  className="w-5 h-5 rounded cursor-pointer border-0 bg-transparent p-0"
-                />
-              </label>
-
-              <div className="flex items-center gap-1">
+              {/* Ô sửa nhanh tên đối tượng ngay trên Popup */}
+              <div className="flex items-center gap-1.5">
                 <input
                   type="text"
-                  value={customHexInput}
-                  onChange={(e) =>
-                    setCustomHexInput(e.target.value.toUpperCase())
-                  }
+                  value={editLabelInput}
+                  onChange={(e) => setEditLabelInput(e.target.value)}
                   onKeyDown={(e) => {
                     if (e.key === "Enter") {
                       e.preventDefault();
-                      triggerColorChange(customHexInput);
+                      triggerColorChange(
+                        selectedHit.currentHex,
+                        editLabelInput
+                      );
                     }
                   }}
-                  maxLength={7}
-                  placeholder="#FF5733"
-                  className="w-18 px-2 py-1 text-[11px] font-mono font-bold rounded-xl border border-studio-200 focus:outline-none focus:border-studio-900 text-studio-900"
+                  placeholder="Tên đối tượng tại điểm click..."
+                  className="w-full px-2.5 py-1 text-[11px] font-semibold rounded-xl bg-studio-50 border border-studio-200 focus:outline-none focus:bg-white focus:border-studio-900 text-studio-900"
                 />
-                <button
-                  type="button"
-                  onClick={() => triggerColorChange(customHexInput)}
-                  className="px-2 py-1 rounded-xl bg-studio-900 text-white text-[10px] font-bold hover:bg-studio-800 cursor-pointer"
-                >
-                  Đổi màu
-                </button>
+                {editLabelInput.trim() &&
+                  editLabelInput.trim() !== selectedHit.objectLabelVi && (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        triggerColorChange(
+                          selectedHit.currentHex,
+                          editLabelInput
+                        )
+                      }
+                      className="shrink-0 px-2 py-1 rounded-xl bg-emerald-700 text-white text-[10px] font-bold hover:bg-emerald-800 cursor-pointer flex items-center gap-0.5"
+                      title="Lưu tên mới cho đối tượng"
+                    >
+                      <Check className="w-3 h-3" />
+                      Lưu
+                    </button>
+                  )}
               </div>
 
-              {onResetRegionOverride && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    const targetRegionIds =
-                      selectedHits.length > 0
-                        ? selectedHits.map((h) => h.regionId)
-                        : [selectedHit.regionId];
-                    onResetRegionOverride(
-                      selectedHit.regionId,
-                      selectedHit.objectLabelVi,
-                      applyScope,
-                      selectedHit.allObjectRegionIds,
-                      targetRegionIds
+              {/* Bảng chọn màu nhanh (Quick Palette Swatches) */}
+              <div className="space-y-1">
+                <span className="text-[10px] font-bold text-studio-600 uppercase tracking-wider flex items-center gap-1">
+                  <Palette className="w-3 h-3 text-studio-500" />
+                  {applyScope === "region" && multiCount > 1
+                    ? `Chọn màu gán đồng loạt cho ${multiCount} vùng:`
+                    : "Chọn nhanh màu từ Bảng màu hiện tại:"}
+                </span>
+                <div className="grid grid-cols-8 gap-1.5 pt-0.5">
+                  {quickSwatches.map((hex, idx) => {
+                    const normHex = hex.toUpperCase();
+                    const isActive =
+                      selectedHit.currentHex.toUpperCase() === normHex;
+                    return (
+                      <button
+                        key={`${normHex}_${idx}`}
+                        type="button"
+                        onClick={() => triggerColorChange(normHex)}
+                        title={
+                          applyScope === "region"
+                            ? multiCount > 1
+                              ? `Đổ màu ${normHex} đồng loạt cho ${multiCount} vùng đang chọn`
+                              : `Đổ màu ${normHex} cho Chỉ vùng #${selectedHit.regionId}`
+                            : `Đổ màu ${normHex} cho Cả đối tượng ${editLabelInput || selectedHit.objectLabelVi}`
+                        }
+                        className={`w-7 h-7 rounded-xl border transition-all cursor-pointer flex items-center justify-center ${
+                          isActive
+                            ? "ring-2 ring-studio-900 scale-110 border-white shadow-sm"
+                            : "border-black/15 hover:scale-110 hover:border-studio-700"
+                        }`}
+                        style={{ backgroundColor: normHex }}
+                      >
+                        {isActive && (
+                          <Check className="w-3.5 h-3.5 text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.8)]" />
+                        )}
+                      </button>
                     );
-                  }}
-                  title="Khôi phục màu tự động cho vùng / nhóm vùng đang chọn"
-                  className="p-1.5 rounded-xl bg-rose-50 text-rose-700 border border-rose-200 hover:bg-rose-100 cursor-pointer"
-                >
-                  <RotateCcw className="w-3.5 h-3.5" />
-                </button>
-              )}
+                  })}
+                </div>
+              </div>
+
+              {/* Color Picker tự do & Nhập HEX thủ công */}
+              <div className="pt-2 border-t border-studio-100 flex items-center justify-between gap-1.5">
+                <label className="inline-flex items-center gap-1.5 px-2 py-1 rounded-xl bg-studio-50 border border-studio-200 hover:border-studio-400 text-[10px] font-semibold text-studio-700 cursor-pointer">
+                  <span>🌈 Tự chọn:</span>
+                  <input
+                    type="color"
+                    value={
+                      /^#[0-9A-Fa-f]{6}$/.test(selectedHit.currentHex)
+                        ? selectedHit.currentHex
+                        : "#FF8FAB"
+                    }
+                    onChange={(e) => triggerColorChange(e.target.value)}
+                    className="w-5 h-5 rounded cursor-pointer border-0 bg-transparent p-0"
+                  />
+                </label>
+
+                <div className="flex items-center gap-1">
+                  <input
+                    type="text"
+                    value={customHexInput}
+                    onChange={(e) =>
+                      setCustomHexInput(e.target.value.toUpperCase())
+                    }
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        triggerColorChange(customHexInput);
+                      }
+                    }}
+                    maxLength={7}
+                    placeholder="#FF5733"
+                    className="w-18 px-2 py-1 text-[11px] font-mono font-bold rounded-xl border border-studio-200 focus:outline-none focus:border-studio-900 text-studio-900"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => triggerColorChange(customHexInput)}
+                    className="px-2 py-1 rounded-xl bg-studio-900 text-white text-[10px] font-bold hover:bg-studio-800 cursor-pointer"
+                  >
+                    Đổi màu
+                  </button>
+                </div>
+
+                {onResetRegionOverride && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const targetRegionIds =
+                        selectedHits.length > 0
+                          ? selectedHits.map((h) => h.regionId)
+                          : [selectedHit.regionId];
+                      onResetRegionOverride(
+                        selectedHit.regionId,
+                        selectedHit.objectLabelVi,
+                        applyScope,
+                        selectedHit.allObjectRegionIds,
+                        targetRegionIds
+                      );
+                    }}
+                    title="Khôi phục màu tự động cho vùng / nhóm vùng đang chọn"
+                    className="p-1.5 rounded-xl bg-rose-50 text-rose-700 border border-rose-200 hover:bg-rose-100 cursor-pointer"
+                  >
+                    <RotateCcw className="w-3.5 h-3.5" />
+                  </button>
+                )}
+              </div>
             </div>
-          </div>
-        )}
-      </div>
+          )}
+        </div>
+      )}
 
       {/* Thanh trượt tinh chỉnh phụ & Hướng dẫn tương tác nhanh */}
       <div className="pt-3 px-2 space-y-2">
