@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useRef, Suspense } from "react";
+import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import {
   Sparkles,
@@ -77,6 +78,8 @@ function StudioContent() {
   const [generatedPrompt, setGeneratedPrompt] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [journalSaved, setJournalSaved] = useState(false);
+  const [isSavingJournal, setIsSavingJournal] = useState(false);
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [currentJournalEntryId, setCurrentJournalEntryId] = useState<
     string | null
   >(null);
@@ -368,24 +371,40 @@ function StudioContent() {
           }
         }
         if (!targetEntry) {
-          const journalRaw = localStorage.getItem("coloring_journal");
-          if (journalRaw) {
-            const list = JSON.parse(journalRaw);
-            if (Array.isArray(list)) {
+          try {
+            const listJournal = JSON.parse(
+              localStorage.getItem("coloring_journal") || "[]"
+            );
+            if (Array.isArray(listJournal)) {
               targetEntry =
-                list.find(
+                listJournal.find(
                   (item: { id?: string }) => item.id === paramEditJournalId
                 ) || null;
             }
-          }
+          } catch {}
+        }
+        if (!targetEntry) {
+          try {
+            const listHist = JSON.parse(
+              localStorage.getItem("coloring_history") || "[]"
+            );
+            if (Array.isArray(listHist)) {
+              targetEntry =
+                listHist.find(
+                  (item: { id?: string }) => item.id === paramEditJournalId
+                ) || null;
+            }
+          } catch {}
         }
 
-        if (targetEntry && typeof targetEntry.originalImage === "string") {
-          const origImg = targetEntry.originalImage;
-          const colImg =
-            typeof targetEntry.coloredImage === "string"
-              ? targetEntry.coloredImage
-              : null;
+        const origCandidate = (targetEntry?.originalImage ||
+          targetEntry?.lineArtUrl) as string | undefined;
+        const colCandidate = (targetEntry?.coloredImage ||
+          targetEntry?.coloredArtUrl) as string | undefined;
+
+        if (targetEntry && typeof origCandidate === "string") {
+          const origImg = origCandidate;
+          const colImg = typeof colCandidate === "string" ? colCandidate : null;
           const entryTitle =
             typeof targetEntry.title === "string"
               ? targetEntry.title
@@ -785,6 +804,7 @@ function StudioContent() {
       appliedSummary?.detectedObjects,
       userRegionColors
     );
+    setJournalSaved(false);
     const timer = setTimeout(async () => {
       const effectiveColors = getEffectivePaletteColors();
       try {
@@ -829,6 +849,7 @@ function StudioContent() {
     overridesToUse: Record<string, string> = userObjectColors
   ) => {
     hasUserModifiedArtworkRef.current = true;
+    setJournalSaved(false);
     const nextConfig: ColoringConfig = {
       ...config,
       customGoldenRatio: nextCustomGolden,
@@ -1178,6 +1199,7 @@ function StudioContent() {
     ).toUpperCase();
     if (!/^#[0-9A-F]{6}$/.test(cleanHex)) return;
     hasUserModifiedArtworkRef.current = true;
+    setJournalSaved(false);
 
     const finalLabelVi = (newLabelRaw ?? editingObjectLabelInput ?? labelVi).trim() || labelVi.trim();
     const oldNormKey = labelVi.trim().toLowerCase();
@@ -1335,6 +1357,7 @@ function StudioContent() {
     ).toUpperCase();
     if (!/^#[0-9A-F]{6}$/.test(cleanHex)) return;
     hasUserModifiedArtworkRef.current = true;
+    setJournalSaved(false);
 
     // ƯU TIÊN 1 (CAO NHẤT - region_colors): Chế độ "Chỉ vùng" hoặc "Chọn nhiều vùng cùng lúc (Batch Coloring)"
     if (payload.applyScope === "region") {
@@ -1422,6 +1445,7 @@ function StudioContent() {
     regionIds?: number[]
   ) => {
     hasUserModifiedArtworkRef.current = true;
+    setJournalSaved(false);
     const nextRegionColors = { ...userRegionColors };
     const nextObjectRegionColors = { ...userObjectRegionColors };
     const nextObjectColors = { ...userObjectColors };
@@ -1500,6 +1524,7 @@ function StudioContent() {
     const cleanLabel = newCustomObjectLabel.trim();
     if (!cleanLabel) return;
     hasUserModifiedArtworkRef.current = true;
+    setJournalSaved(false);
     const rawHex = newCustomObjectHex.trim();
     const cleanHex = (
       rawHex.startsWith("#") ? rawHex : `#${rawHex}`
@@ -1632,6 +1657,7 @@ function StudioContent() {
   // Xóa hoàn toàn 1 thẻ đối tượng mà AI nhận diện sai hoặc bị thừa ([Xóa thẻ])
   const handleDeleteObjectTag = async (labelVi: string, objId?: string) => {
     hasUserModifiedArtworkRef.current = true;
+    setJournalSaved(false);
     const normKey = labelVi.trim().toLowerCase();
     const nextOverrides = { ...userObjectColors };
     delete nextOverrides[normKey];
@@ -1727,6 +1753,7 @@ function StudioContent() {
   // Xóa ghi đè màu của 1 đối tượng cụ thể (Ưu tiên 2) để quay về màu tự động của bảng màu (vẫn bảo toàn các vùng đã chỉnh riêng ở Ưu tiên 1)
   const handleRemoveObjectOverride = async (labelVi: string) => {
     hasUserModifiedArtworkRef.current = true;
+    setJournalSaved(false);
     const normKey = labelVi.trim().toLowerCase();
     const nextOverrides = { ...userObjectColors };
     delete nextOverrides[normKey];
@@ -1778,6 +1805,7 @@ function StudioContent() {
   // Xóa toàn bộ ghi đè màu đối tượng và màu vùng
   const handleResetAllObjectOverrides = async () => {
     hasUserModifiedArtworkRef.current = true;
+    setJournalSaved(false);
     setUserObjectColors({});
     setUserObjectRegionColors({});
     setUserRegionColors({});
@@ -1814,14 +1842,87 @@ function StudioContent() {
     }
   };
 
+  // Nén ảnh Base64 giảm dung lượng từ ~1.5MB xuống ~50KB-80KB để lưu trữ an toàn trong LocalStorage (chống QuotaExceededError)
+  const compressImageForStorage = (
+    dataUrl: string,
+    maxDim = 800,
+    quality = 0.82
+  ): Promise<string> => {
+    if (!dataUrl || typeof window === "undefined") return Promise.resolve(dataUrl);
+    if (!dataUrl.startsWith("data:image/")) return Promise.resolve(dataUrl);
+    if (dataUrl.length < 50000) return Promise.resolve(dataUrl);
+
+    return new Promise((resolve) => {
+      const img = new Image();
+      img.crossOrigin = "anonymous";
+      img.onload = () => {
+        let { width, height } = img;
+        if (width > maxDim || height > maxDim) {
+          if (width > height) {
+            height = Math.round((height * maxDim) / width);
+            width = maxDim;
+          } else {
+            width = Math.round((width * maxDim) / height);
+            height = maxDim;
+          }
+        }
+        const canvas = document.createElement("canvas");
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) {
+          resolve(dataUrl);
+          return;
+        }
+        ctx.fillStyle = "#FFFFFF";
+        ctx.fillRect(0, 0, width, height);
+        ctx.drawImage(img, 0, 0, width, height);
+        try {
+          const compressed = canvas.toDataURL("image/jpeg", quality);
+          resolve(compressed.length < dataUrl.length ? compressed : dataUrl);
+        } catch {
+          resolve(dataUrl);
+        }
+      };
+      img.onerror = () => resolve(dataUrl);
+      img.src = dataUrl;
+    });
+  };
+
+  // Lưu trữ dữ liệu an toàn vào LocalStorage, tự động dọn bớt bản ghi cũ nếu bộ nhớ trình duyệt bị đầy
+  const safeSaveToLocalStorage = (key: string, list: unknown[]): boolean => {
+    if (typeof window === "undefined") return false;
+    const items = [...list];
+    while (items.length > 0) {
+      try {
+        localStorage.setItem(key, JSON.stringify(items));
+        return true;
+      } catch (e: unknown) {
+        const err = e as { name?: string; code?: number; number?: number };
+        if (
+          err?.name === "QuotaExceededError" ||
+          err?.code === 22 ||
+          err?.code === 1014 ||
+          err?.number === -2147024882
+        ) {
+          items.pop();
+        } else {
+          console.error(`Lỗi khi lưu vào ${key}:`, e);
+          return false;
+        }
+      }
+    }
+    return false;
+  };
+
   // Lưu trữ hoặc cập nhật gói dữ liệu trạng thái phiên làm việc (Session Metadata JSON) vào Nhật ký (localStorage)
-  const saveSessionToJournal = (params: {
+  const saveSessionToJournal = async (params: {
     coloredImg: string;
     summaryToSave?: typeof appliedSummary;
     sceneAnalysisToSave?: AISceneAnalysis;
     preferredId?: string | null;
-  }) => {
-    if (!originalImage || !params.coloredImg) return;
+  }): Promise<boolean> => {
+    if (!originalImage || !params.coloredImg) return false;
     const activeNamed = NAMED_PALETTES.find(
       (p) => p.id === selectedNamedPaletteId
     );
@@ -1830,14 +1931,23 @@ function StudioContent() {
       params.preferredId || currentJournalEntryId || `gen-${Date.now()}`;
     setCurrentJournalEntryId(entryId);
 
+    // Nén ảnh để đảm bảo an toàn bộ nhớ trình duyệt
+    const [compressedOriginal, compressedColored] = await Promise.all([
+      compressImageForStorage(originalImage, 800, 0.82),
+      compressImageForStorage(params.coloredImg, 800, 0.82),
+    ]);
+
     const entryPayload = {
       id: entryId,
-      title: imageName,
-      originalImage,
-      coloredImage: params.coloredImg,
+      title: imageName || "Tác Phẩm Tô Màu",
+      originalImage: compressedOriginal,
+      coloredImage: compressedColored,
+      lineArtUrl: compressedOriginal,
+      coloredArtUrl: compressedColored,
       mimeType,
       style: config.style,
       palette: activeNamed?.name || config.palette,
+      timestamp: new Date().toISOString(),
       date: new Date().toLocaleDateString("vi-VN"),
       config: {
         ...config,
@@ -1856,9 +1966,35 @@ function StudioContent() {
       effectSettings: config.effectSettings || { ...DEFAULT_EFFECT_SETTINGS },
       aiSceneAnalysis: params.sceneAnalysisToSave ?? lastAiSceneAnalysis,
       appliedSummary: params.summaryToSave ?? appliedSummary,
+      metadata: {
+        lineArtUrl: compressedOriginal,
+        coloredArtUrl: compressedColored,
+        palette: activeNamed?.name || config.palette,
+        style: config.style,
+        config: {
+          ...config,
+          customGoldenRatio: config.customGoldenRatio,
+          effectSettings: config.effectSettings || {
+            ...DEFAULT_EFFECT_SETTINGS,
+          },
+        },
+        userObjectColors,
+        userObjectRegionColors,
+        userRegionColors,
+        customGoldenRatio: config.customGoldenRatio,
+        effectSettings: config.effectSettings || {
+          ...DEFAULT_EFFECT_SETTINGS,
+        },
+        appliedSummary: params.summaryToSave ?? appliedSummary,
+        timestamp: new Date().toISOString(),
+      },
     };
 
+    let journalSuccess = false;
+    let historySuccess = false;
+
     try {
+      // 1. Lưu vào coloring_journal
       const localJournal = JSON.parse(
         localStorage.getItem("coloring_journal") || "[]"
       );
@@ -1871,15 +2007,74 @@ function StudioContent() {
       } else {
         list.unshift(entryPayload);
       }
-      localStorage.setItem(
+      journalSuccess = safeSaveToLocalStorage(
         "coloring_journal",
-        JSON.stringify(list.slice(0, 30))
+        list.slice(0, 30)
       );
-      sessionStorage.setItem(
-        "active_editing_journal_entry",
-        JSON.stringify(entryPayload)
+
+      // 2. Lưu đồng thời vào coloring_history theo yêu cầu kỹ thuật
+      const localHistory = JSON.parse(
+        localStorage.getItem("coloring_history") || "[]"
       );
-    } catch {}
+      const histList = Array.isArray(localHistory) ? localHistory : [];
+      const histIdx = histList.findIndex(
+        (item: { id?: string }) => item.id === entryId
+      );
+      if (histIdx >= 0) {
+        histList[histIdx] = entryPayload;
+      } else {
+        histList.unshift(entryPayload);
+      }
+      historySuccess = safeSaveToLocalStorage(
+        "coloring_history",
+        histList.slice(0, 30)
+      );
+
+      try {
+        sessionStorage.setItem(
+          "active_editing_journal_entry",
+          JSON.stringify(entryPayload)
+        );
+      } catch {}
+
+      return journalSuccess || historySuccess;
+    } catch (e) {
+      console.error("saveSessionToJournal error:", e);
+      return false;
+    }
+  };
+
+  // Hàm xử lý người dùng bấm nút "Lưu Vào Nhật Ký" (UI Action Handler)
+  const handleSaveToHistory = async () => {
+    if (!originalImage || !resultImage) return;
+    setIsSavingJournal(true);
+    try {
+      const ok = await saveSessionToJournal({
+        coloredImg: resultImage,
+        summaryToSave: appliedSummary,
+        sceneAnalysisToSave: lastAiSceneAnalysis,
+        preferredId: currentJournalEntryId,
+      });
+
+      if (ok) {
+        setJournalSaved(true);
+        setToastMessage("Đã lưu thành công vào Nhật Ký Sáng Tạo!");
+        setTimeout(() => {
+          setToastMessage((prev) =>
+            prev === "Đã lưu thành công vào Nhật Ký Sáng Tạo!" ? null : prev
+          );
+        }, 4000);
+      } else {
+        alert(
+          "Không thể lưu vào bộ nhớ trình duyệt do dung lượng bộ nhớ LocalStorage đã đầy. Vui lòng xóa bớt tranh cũ trong Nhật Ký!"
+        );
+      }
+    } catch (err) {
+      console.error("Lỗi khi lưu vào nhật ký:", err);
+      alert("Đã xảy ra lỗi khi lưu vào Nhật Ký Sáng Tạo.");
+    } finally {
+      setIsSavingJournal(false);
+    }
   };
 
   // Tự động đồng bộ các chỉnh sửa mới nhất (đổi màu đối tượng, chỉ vùng, tỷ lệ Golden Ratio, thanh trượt Hiệu ứng) vào bản ghi Nhật ký hiện tại
@@ -2005,14 +2200,16 @@ function StudioContent() {
       setGeneratedPrompt(data.prompt);
 
       // Tự động lưu bản ghi kèm đầy đủ gói dữ liệu trạng thái (Metadata JSON) vào nhật ký trình duyệt
-      saveSessionToJournal({
+      const savedOk = await saveSessionToJournal({
         coloredImg: finalColoredImage,
         summaryToSave: latestSummary,
         sceneAnalysisToSave: data.aiSceneAnalysis || lastAiSceneAnalysis,
         preferredId:
           currentJournalEntryId || data.generationId || `gen-${Date.now()}`,
       });
-      setJournalSaved(true);
+      if (savedOk) {
+        setJournalSaved(true);
+      }
     } catch (err: unknown) {
       // Fallback: Nếu API gặp sự cố hoặc ngoại tuyến, vẫn tô màu thông minh thành công cho người dùng
       if (originalImage) {
@@ -2040,13 +2237,15 @@ function StudioContent() {
           setIsMockMode(true);
           setActiveProvider("mock");
           setErrorMessage(null);
-          saveSessionToJournal({
+          const fallbackSavedOk = await saveSessionToJournal({
             coloredImg: smartRes.imageUrl,
             summaryToSave: smartRes.appliedSummary || null,
             sceneAnalysisToSave: lastAiSceneAnalysis,
             preferredId: currentJournalEntryId || `gen-${Date.now()}`,
           });
-          setJournalSaved(true);
+          if (fallbackSavedOk) {
+            setJournalSaved(true);
+          }
           return;
         } catch {
           // Fall through to error setting
@@ -2219,9 +2418,15 @@ function StudioContent() {
             </h2>
             <ConfigurationPanel
               config={config}
-              onChange={setConfig}
+              onChange={(nextCfg) => {
+                setConfig(nextCfg);
+                setJournalSaved(false);
+              }}
               selectedNamedPaletteId={selectedNamedPaletteId}
-              onSelectNamedPalette={setSelectedNamedPaletteId}
+              onSelectNamedPalette={(id) => {
+                setSelectedNamedPaletteId(id);
+                setJournalSaved(false);
+              }}
             />
           </div>
 
@@ -2388,25 +2593,28 @@ function StudioContent() {
 
                   <div className="flex items-center gap-2">
                     <button
-                      onClick={() => {
-                        if (resultImage) {
-                          saveSessionToJournal({
-                            coloredImg: resultImage,
-                            summaryToSave: appliedSummary,
-                            sceneAnalysisToSave: lastAiSceneAnalysis,
-                            preferredId: currentJournalEntryId,
-                          });
-                        }
-                        setJournalSaved(true);
-                      }}
-                      className={`px-3 py-2 rounded-2xl text-xs font-medium border transition-all flex items-center gap-1.5 ${
+                      onClick={handleSaveToHistory}
+                      disabled={journalSaved || isSavingJournal}
+                      className={`px-3.5 py-2 rounded-2xl text-xs font-semibold border transition-all flex items-center gap-1.5 shadow-sm ${
                         journalSaved
-                          ? "bg-emerald-50 text-emerald-700 border-emerald-200"
-                          : "bg-white text-studio-600 border-studio-200 hover:bg-studio-50"
-                      }`}
+                          ? "bg-emerald-50 text-emerald-700 border-emerald-200 cursor-default"
+                          : "bg-white text-studio-700 border-studio-200 hover:bg-studio-50 hover:border-studio-300"
+                      } ${isSavingJournal ? "opacity-75 cursor-wait" : ""}`}
                     >
-                      <Bookmark className="w-3.5 h-3.5" />
-                      {journalSaved ? "Đã Lưu Trong Nhật Ký" : "Lưu Vào Nhật Ký"}
+                      {isSavingJournal ? (
+                        <div className="w-3.5 h-3.5 border-2 border-studio-400 border-t-studio-700 rounded-full animate-spin" />
+                      ) : (
+                        <Bookmark
+                          className={`w-3.5 h-3.5 ${
+                            journalSaved ? "fill-emerald-600 text-emerald-600" : ""
+                          }`}
+                        />
+                      )}
+                      {journalSaved
+                        ? "Đã Lưu Trong Nhật Ký"
+                        : isSavingJournal
+                        ? "Đang lưu..."
+                        : "Lưu Vào Nhật Ký"}
                     </button>
                   </div>
                 </div>
@@ -3561,6 +3769,28 @@ function StudioContent() {
           </div>
         </div>
       </div>
+
+      {/* Toast thông báo lưu thành công */}
+      {toastMessage && (
+        <div className="fixed bottom-6 right-6 z-50 flex items-center gap-3 bg-studio-900 text-white px-5 py-3.5 rounded-2xl shadow-xl border border-white/10 animate-in fade-in slide-in-from-bottom-3 duration-300">
+          <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0" />
+          <div className="text-xs">
+            <p className="font-semibold">{toastMessage}</p>
+            <Link
+              href="/journal"
+              className="text-pastel-lilac underline hover:text-white transition-colors mt-0.5 inline-block text-[11px]"
+            >
+              Xem Nhật Ký Sáng Tạo &rarr;
+            </Link>
+          </div>
+          <button
+            onClick={() => setToastMessage(null)}
+            className="ml-2 text-white/60 hover:text-white p-1 rounded-lg"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
     </div>
   );
 }

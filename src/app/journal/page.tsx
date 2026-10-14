@@ -28,6 +28,10 @@ export interface JournalEntry {
   title: string;
   originalImage: string;
   coloredImage: string;
+  lineArtUrl?: string;
+  coloredArtUrl?: string;
+  timestamp?: string;
+  metadata?: Record<string, unknown>;
   mimeType?: string;
   style: string;
   palette: string;
@@ -70,10 +74,103 @@ export default function JournalPage() {
   useEffect(() => {
     setMounted(true);
     try {
-      const stored = localStorage.getItem("coloring_journal");
-      if (stored) {
-        setEntries(JSON.parse(stored));
+      const storedJournal = localStorage.getItem("coloring_journal");
+      const storedHistory = localStorage.getItem("coloring_history");
+
+      let rawList: Record<string, unknown>[] = [];
+      if (storedJournal) {
+        try {
+          const parsed = JSON.parse(storedJournal);
+          if (Array.isArray(parsed)) rawList = parsed;
+        } catch {}
       }
+      if (storedHistory) {
+        try {
+          const parsed = JSON.parse(storedHistory);
+          if (Array.isArray(parsed)) {
+            const seenIds = new Set(rawList.map((e) => String(e.id)));
+            for (const it of parsed) {
+              if (it && it.id && !seenIds.has(String(it.id))) {
+                rawList.push(it);
+                seenIds.add(String(it.id));
+              }
+            }
+          }
+        } catch {}
+      }
+
+      const normalizedList: JournalEntry[] = rawList
+        .filter(
+          (item) =>
+            item &&
+            (item.originalImage || item.lineArtUrl) &&
+            (item.coloredImage || item.coloredArtUrl)
+        )
+        .map((item) => {
+          const orig = String(item.originalImage || item.lineArtUrl || "");
+          const col = String(item.coloredImage || item.coloredArtUrl || "");
+          const meta = (item.metadata as Record<string, unknown>) || {};
+          const metaConfig = meta.config as ColoringConfig | undefined;
+
+          return {
+            id: String(item.id || `entry-${Date.now()}`),
+            title: String(item.title || "Tác Phẩm Tô Màu"),
+            originalImage: orig,
+            coloredImage: col,
+            lineArtUrl: orig,
+            coloredArtUrl: col,
+            mimeType:
+              typeof item.mimeType === "string" ? item.mimeType : "image/png",
+            style: String(item.style || metaConfig?.style || "Pastel"),
+            palette: String(item.palette || metaConfig?.palette || "Pastel"),
+            date: String(
+              item.date ||
+                (item.timestamp
+                  ? new Date(String(item.timestamp)).toLocaleDateString("vi-VN")
+                  : new Date().toLocaleDateString("vi-VN"))
+            ),
+            timestamp:
+              typeof item.timestamp === "string" ? item.timestamp : undefined,
+            config: (item.config as ColoringConfig | undefined) || metaConfig,
+            selectedNamedPaletteId:
+              (item.selectedNamedPaletteId as string | undefined) ||
+              (meta.selectedNamedPaletteId as string | undefined),
+            paletteColors:
+              (item.paletteColors as string[] | undefined) ||
+              (meta.paletteColors as string[] | undefined),
+            userObjectColors:
+              (item.userObjectColors as Record<string, string> | undefined) ||
+              (meta.userObjectColors as Record<string, string> | undefined),
+            userObjectRegionColors:
+              (item.userObjectRegionColors as
+                | Record<number, string>
+                | undefined) ||
+              (meta.userObjectRegionColors as
+                | Record<number, string>
+                | undefined),
+            userRegionColors:
+              (item.userRegionColors as Record<number, string> | undefined) ||
+              (meta.userRegionColors as Record<number, string> | undefined),
+            deletedObjectLabels:
+              (item.deletedObjectLabels as string[] | undefined) ||
+              (meta.deletedObjectLabels as string[] | undefined),
+            customGoldenRatio:
+              (item.customGoldenRatio as CustomGoldenRatioConfig | undefined) ||
+              (meta.customGoldenRatio as CustomGoldenRatioConfig | undefined),
+            effectSettings:
+              (item.effectSettings as EffectSettings | undefined) ||
+              (meta.effectSettings as EffectSettings | undefined),
+            aiSceneAnalysis:
+              (item.aiSceneAnalysis as AISceneAnalysis | undefined) ||
+              (meta.aiSceneAnalysis as AISceneAnalysis | undefined),
+            appliedSummary:
+              (item.appliedSummary as JournalEntry["appliedSummary"]) ||
+              (meta.appliedSummary as JournalEntry["appliedSummary"]),
+            metadata: meta,
+          };
+        });
+
+      setEntries(normalizedList);
     } catch {}
   }, []);
 
@@ -82,6 +179,7 @@ export default function JournalPage() {
     setEntries(updated);
     try {
       localStorage.setItem("coloring_journal", JSON.stringify(updated));
+      localStorage.setItem("coloring_history", JSON.stringify(updated));
     } catch {}
   };
 
